@@ -1,6 +1,14 @@
+import { logout } from "@/app/actions";
+import { LoginForm } from "@/components/login-form";
 import { UploadForm } from "@/components/upload-form";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
 
-export default function Home() {
+export default async function Home() {
+  const supabase = await createServerSupabaseClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
   return (
     <div className="min-h-screen bg-zinc-50">
       <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center px-6 py-12">
@@ -8,16 +16,51 @@ export default function Home() {
           <p className="text-sm font-medium uppercase text-zinc-500">
             Interview Transcriber
           </p>
-          <h1 className="mt-3 text-3xl font-semibold text-zinc-950">
-            音声ファイルをアップロード
-          </h1>
-          <p className="mt-3 max-w-2xl text-zinc-600">
-            アップロード後、queued 状態の文字起こしジョブを作成します。OpenAI API と ffmpeg による処理は次のステップで worker 側に実装します。
-          </p>
 
-          <div className="mt-8">
-            <UploadForm />
-          </div>
+          {user ? (
+            <>
+              <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h1 className="text-3xl font-semibold text-zinc-950">
+                    音声ファイルをアップロード
+                  </h1>
+                  <p className="mt-3 max-w-2xl text-zinc-600">
+                    アップロード後、queued 状態の文字起こしジョブを作成します。
+                  </p>
+                </div>
+                <form action={logout}>
+                  <button
+                    type="submit"
+                    className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+                  >
+                    ログアウト
+                  </button>
+                </form>
+              </div>
+
+              <div className="mt-5 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
+                <span className="font-medium">ログイン中 user_id:</span>{" "}
+                <span className="break-all font-mono text-xs">{user.id}</span>
+              </div>
+
+              <div className="mt-8">
+                <UploadForm />
+              </div>
+            </>
+          ) : (
+            <>
+              <h1 className="mt-3 text-3xl font-semibold text-zinc-950">
+                ログイン
+              </h1>
+              <p className="mt-3 max-w-2xl text-zinc-600">
+                音声アップロードには Supabase Auth の email/password ログインが必要です。
+              </p>
+
+              <div className="mt-8">
+                <LoginForm />
+              </div>
+            </>
+          )}
         </section>
       </main>
     </div>

@@ -16,7 +16,7 @@ values (
   'audio-uploads',
   'audio-uploads',
   false,
-  524288000,
+  1073741824,
   array[
     'audio/mpeg',
     'audio/m4a',

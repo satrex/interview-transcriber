@@ -14,6 +14,10 @@ export type UploadActionState = {
   error: string | null;
 };
 
+export type LoginActionState = {
+  error: string | null;
+};
+
 export type QualityNotesActionState = {
   error: string | null;
   success: boolean;
@@ -23,6 +27,43 @@ export type SpeakerNamesActionState = {
   error: string | null;
   success: boolean;
 };
+
+export async function loginWithPassword(
+  _previousState: LoginActionState,
+  formData: FormData,
+): Promise<LoginActionState> {
+  const email = getTextValue(formData, "email");
+  const password = getTextValue(formData, "password");
+
+  if (!email || !password) {
+    return { error: "メールアドレスとパスワードを入力してください。" };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      return { error: `ログインに失敗しました: ${error.message}` };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message };
+  }
+
+  revalidatePath("/");
+  redirect("/");
+}
+
+export async function logout() {
+  const supabase = await createServerSupabaseClient();
+  await supabase.auth.signOut();
+  revalidatePath("/");
+  redirect("/");
+}
 
 export async function createTranscriptionJob(
   _previousState: UploadActionState,

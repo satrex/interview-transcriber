@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { JobAutoRefresh } from "@/components/job-auto-refresh";
 import {
   QualityNotesForm,
   type QualityNotesFormValues,
@@ -148,6 +149,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
           <div>
             <dt className="text-zinc-500">Progress</dt>
             <dd className="mt-1 font-medium text-zinc-950">{job.progress}%</dd>
+            <JobAutoRefresh status={job.status} />
           </div>
           <div>
             <dt className="text-zinc-500">Storage path</dt>

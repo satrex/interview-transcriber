@@ -21,7 +21,7 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_AUDIO_BUCKET=audio-uploads
-MAX_UPLOAD_SIZE_MB=500
+MAX_UPLOAD_SIZE_MB=1024
 ```
 
 Worker `worker/.env`:
@@ -69,9 +69,9 @@ Supabase Storage bucket を確認します。
 - bucket: `audio-uploads`
 - public: false
 - allowed MIME types: `audio/mpeg`, `audio/m4a`, `audio/mp4`, `audio/x-m4a`, `audio/wav`, `audio/x-wav`
-- file size limit: 500 MB
+- file size limit: 1 GB
 
-2 時間音声は WAV だと 500 MB を超えやすいため、まず mp3 または m4a で検証します。
+2 時間音声は WAV だと 1 GB を超えやすいため、まず mp3 または m4a で検証します。
 
 ## 共通フロー
 
@@ -207,7 +207,7 @@ test audio:
 
 - 長さ: 2 時間前後
 - 形式: `mp3` または `m4a`
-- サイズ: 500 MB 未満
+- サイズ: 1 GB 未満
 - 内容: 実 interview に近い長尺会話
 - 推奨ファイル名: `durability-2h.m4a`
 

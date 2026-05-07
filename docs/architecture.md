@@ -18,7 +18,7 @@ This separation is intentional. Vercel should not run long transcription workloa
 - User authentication is required
 - Jobs are owned by `user_id`
 - RLS is enabled from the beginning
-- Upload limit: `500MB`
+- Upload limit: `1GB`
 - Supported input formats: `mp3`, `m4a`, `wav`
 - Worker concurrency: `1`
 
@@ -228,7 +228,7 @@ SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_AUDIO_BUCKET=audio-uploads
 
 NEXT_PUBLIC_APP_URL=
-MAX_UPLOAD_SIZE_MB=500
+MAX_UPLOAD_SIZE_MB=1024
 ```
 
 ### Worker
@@ -383,7 +383,7 @@ Validation should happen in both the app and the worker.
 ### Web App Validation
 
 - Allowed extensions: `mp3`, `m4a`, `wav`
-- Max file size: `500MB`
+- Max file size: `1GB`
 - Reject empty uploads
 
 ### Worker Validation

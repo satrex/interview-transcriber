@@ -5,7 +5,7 @@ export function getAudioBucketName() {
 }
 
 export function getMaxUploadSizeBytes() {
-  const sizeMb = Number.parseInt(process.env.MAX_UPLOAD_SIZE_MB || "500", 10);
+  const sizeMb = Number.parseInt(process.env.MAX_UPLOAD_SIZE_MB || "1024", 10);
   return sizeMb * 1024 * 1024;
 }
 
@@ -15,7 +15,7 @@ export function validateAudioFile(file: File) {
   }
 
   if (file.size > getMaxUploadSizeBytes()) {
-    return `アップロードできる音声ファイルは最大 ${process.env.MAX_UPLOAD_SIZE_MB || "500"}MB です。`;
+    return `アップロードできる音声ファイルは最大 ${process.env.MAX_UPLOAD_SIZE_MB || "1024"}MB です。`;
   }
 
   const extension = getFileExtension(file.name);
