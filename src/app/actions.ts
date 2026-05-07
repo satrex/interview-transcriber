@@ -28,6 +28,11 @@ export type SpeakerNamesActionState = {
   success: boolean;
 };
 
+export type ExpectedSpeakerCountActionState = {
+  error: string | null;
+  success: boolean;
+};
+
 export async function loginWithPassword(
   _previousState: LoginActionState,
   formData: FormData,
@@ -267,6 +272,72 @@ export async function saveSpeakerNames(
     if (upsertError) {
       return {
         error: `話者名の保存に失敗しました: ${upsertError.message}`,
+        success: false,
+      };
+    }
+
+    revalidatePath(`/jobs/${job.id}`);
+    return { error: null, success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
+export async function saveExpectedSpeakerCount(
+  _previousState: ExpectedSpeakerCountActionState,
+  formData: FormData,
+): Promise<ExpectedSpeakerCountActionState> {
+  const jobId = getTextValue(formData, "jobId");
+  const expectedSpeakerCountValue = getTextValue(
+    formData,
+    "expectedSpeakerCount",
+  );
+  const expectedSpeakerCount = Number.parseInt(expectedSpeakerCountValue, 10);
+
+  if (!jobId) {
+    return { error: "ジョブが指定されていません。", success: false };
+  }
+
+  if (
+    !Number.isInteger(expectedSpeakerCount)
+    || expectedSpeakerCount < 1
+    || expectedSpeakerCount > 20
+  ) {
+    return { error: "想定話者数は1から20の整数で入力してください。", success: false };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。", success: false };
+    }
+
+    const { data: job, error: jobError } = await supabase
+      .from("transcription_jobs")
+      .select("id")
+      .eq("id", jobId)
+      .single();
+
+    if (jobError || !job) {
+      return { error: "ジョブが見つかりません。", success: false };
+    }
+
+    const adminSupabase = createAdminSupabaseClient();
+    const { error: updateError } = await adminSupabase
+      .from("transcription_jobs")
+      .update({ expected_speaker_count: expectedSpeakerCount })
+      .eq("id", job.id)
+      .eq("user_id", user.id);
+
+    if (updateError) {
+      return {
+        error: `想定話者数の保存に失敗しました: ${updateError.message}`,
         success: false,
       };
     }

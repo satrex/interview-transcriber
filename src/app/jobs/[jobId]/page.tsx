@@ -5,11 +5,13 @@ import {
   QualityNotesForm,
   type QualityNotesFormValues,
 } from "@/components/quality-notes-form";
+import { SpeakerAnalysisPanel } from "@/components/speaker-analysis-panel";
 import {
   SpeakerNamesForm,
   type SpeakerNameFormRow,
 } from "@/components/speaker-names-form";
 import { TranscriptMarkdown } from "@/components/transcript-markdown";
+import { analyzeSpeakers } from "@/lib/speaker-analysis";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import type { SpeakerNameMap, TranscriptSegment } from "@/lib/transcript";
 
@@ -45,7 +47,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
   const { data: job, error } = await supabase
     .from("transcription_jobs")
     .select(
-      "id, original_filename, status, progress, error_message, storage_path, created_at, updated_at",
+      "id, original_filename, status, progress, error_message, storage_path, expected_speaker_count, created_at, updated_at",
     )
     .eq("id", jobId)
     .single();
@@ -125,6 +127,10 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
       displayName: speakerNames[speakerLabel] || "",
       speakerLabel,
     }));
+  const speakerAnalysis = analyzeSpeakers(
+    segments,
+    Number(job.expected_speaker_count || 2),
+  );
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-3xl px-6 py-12">
@@ -181,6 +187,8 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
           jobId={job.id}
           initialValues={qualityNoteValues}
         />
+
+        <SpeakerAnalysisPanel analysis={speakerAnalysis} jobId={job.id} />
 
         <SpeakerNamesForm jobId={job.id} speakers={speakerFormRows} />
 
