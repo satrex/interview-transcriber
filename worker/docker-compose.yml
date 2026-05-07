@@ -1,0 +1,11 @@
+services:
+  worker:
+    build: .
+    env_file:
+      - .env
+    restart: "no"
+    volumes:
+      - worker-tmp:/tmp/interview-transcriber
+
+volumes:
+  worker-tmp:

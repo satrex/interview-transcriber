@@ -1,0 +1,19 @@
+[Unit]
+Description=Interview Transcriber Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/interview-transcriber/worker
+EnvironmentFile=/opt/interview-transcriber/worker/.env
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=10
+User=interview-worker
+Group=interview-worker
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
