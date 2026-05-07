@@ -4,17 +4,20 @@ import { useState } from "react";
 import {
   buildTranscriptBlocks,
   buildTranscriptMarkdown,
+  buildTranscriptText,
   formatTimestamp,
   type SpeakerNameMap,
   type TranscriptSegment,
 } from "@/lib/transcript";
 
 type TranscriptMarkdownProps = {
+  exportBaseName?: string;
   segments: TranscriptSegment[];
   speakerNames?: SpeakerNameMap;
 };
 
 export function TranscriptMarkdown({
+  exportBaseName = "transcript",
   segments,
   speakerNames = {},
 }: TranscriptMarkdownProps) {
@@ -25,6 +28,8 @@ export function TranscriptMarkdown({
 
   const blocks = buildTranscriptBlocks(segments, speakerNames);
   const markdown = buildTranscriptMarkdown(blocks, { showTimestamps });
+  const plainText = buildTranscriptText(blocks, { showTimestamps });
+  const safeExportBaseName = buildSafeFileName(exportBaseName);
 
   async function copyMarkdown() {
     try {
@@ -33,6 +38,14 @@ export function TranscriptMarkdown({
     } catch {
       setCopyStatus("failed");
     }
+  }
+
+  function downloadMarkdown() {
+    downloadTextFile(`${safeExportBaseName}.md`, markdown, "text/markdown");
+  }
+
+  function downloadPlainText() {
+    downloadTextFile(`${safeExportBaseName}.txt`, plainText, "text/plain");
   }
 
   if (segments.length === 0) {
@@ -51,7 +64,7 @@ export function TranscriptMarkdown({
             編集用 Markdown
           </h2>
           <p className="mt-1 text-sm text-zinc-500">
-            連続する同一話者の発話は結合して表示しています。
+            同一話者の連続発言を結合し、長い発言は段落分けしています。
           </p>
         </div>
 
@@ -71,6 +84,20 @@ export function TranscriptMarkdown({
             className="inline-flex min-h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800"
           >
             Markdownをコピー
+          </button>
+          <button
+            type="button"
+            onClick={downloadMarkdown}
+            className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+          >
+            .md保存
+          </button>
+          <button
+            type="button"
+            onClick={downloadPlainText}
+            className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+          >
+            .txt保存
           </button>
         </div>
       </div>
@@ -92,15 +119,21 @@ export function TranscriptMarkdown({
             key={`${block.speakerLabel}-${block.startSec}-${block.endSec}`}
             className="rounded-md border border-zinc-200 bg-zinc-50 p-4"
           >
-            <p className="whitespace-pre-wrap text-sm leading-7 text-zinc-900">
+            <div className="text-sm leading-7 text-zinc-900">
               {showTimestamps ? (
                 <span className="mr-2 font-mono text-xs text-zinc-500">
                   [{formatTimestamp(block.startSec)}]
                 </span>
               ) : null}
               <span className="font-semibold">{block.speakerName}：</span>
-              {block.text}
-            </p>
+              <div className="mt-2 space-y-3">
+                {block.paragraphs.map((paragraph, index) => (
+                  <p key={`${block.speakerLabel}-${block.startSec}-${index}`}>
+                    {paragraph}
+                  </p>
+                ))}
+              </div>
+            </div>
           </article>
         ))}
       </div>
@@ -113,4 +146,20 @@ export function TranscriptMarkdown({
       />
     </section>
   );
+}
+
+function downloadTextFile(fileName: string, text: string, type: string) {
+  const blob = new Blob([text], { type: `${type};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildSafeFileName(fileName: string) {
+  const baseName = fileName.replace(/\.[^/.]+$/, "");
+  return baseName.replace(/[\\/:*?"<>|]+/g, "_").trim() || "transcript";
 }

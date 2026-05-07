@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
@@ -11,6 +12,16 @@ import {
 
 export type UploadActionState = {
   error: string | null;
+};
+
+export type QualityNotesActionState = {
+  error: string | null;
+  success: boolean;
+};
+
+export type SpeakerNamesActionState = {
+  error: string | null;
+  success: boolean;
 };
 
 export async function createTranscriptionJob(
@@ -81,4 +92,153 @@ export async function createTranscriptionJob(
   }
 
   redirect(`/jobs/${jobId}`);
+}
+
+export async function saveQualityNotes(
+  _previousState: QualityNotesActionState,
+  formData: FormData,
+): Promise<QualityNotesActionState> {
+  const jobId = getTextValue(formData, "jobId");
+
+  if (!jobId) {
+    return { error: "ジョブが指定されていません。", success: false };
+  }
+
+  const recordingEnvironment = getTextValue(formData, "recordingEnvironment");
+  const misrecognitionNotes = getTextValue(formData, "misrecognitionNotes");
+  const speakerMisidentificationNotes = getTextValue(
+    formData,
+    "speakerMisidentificationNotes",
+  );
+  const timestampOffsetNotes = getTextValue(formData, "timestampOffsetNotes");
+  const generalQualityNotes = getTextValue(formData, "generalQualityNotes");
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。", success: false };
+    }
+
+    const { data: job, error: jobError } = await supabase
+      .from("transcription_jobs")
+      .select("id")
+      .eq("id", jobId)
+      .single();
+
+    if (jobError || !job) {
+      return { error: "ジョブが見つかりません。", success: false };
+    }
+
+    const { error: upsertError } = await supabase
+      .from("transcription_job_quality_notes")
+      .upsert(
+        {
+          job_id: job.id,
+          user_id: user.id,
+          recording_environment: recordingEnvironment,
+          misrecognition_notes: misrecognitionNotes,
+          speaker_misidentification_notes: speakerMisidentificationNotes,
+          timestamp_offset_notes: timestampOffsetNotes,
+          general_quality_notes: generalQualityNotes,
+        },
+        { onConflict: "job_id" },
+      );
+
+    if (upsertError) {
+      return {
+        error: `品質メモの保存に失敗しました: ${upsertError.message}`,
+        success: false,
+      };
+    }
+
+    revalidatePath(`/jobs/${job.id}`);
+    return { error: null, success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
+export async function saveSpeakerNames(
+  _previousState: SpeakerNamesActionState,
+  formData: FormData,
+): Promise<SpeakerNamesActionState> {
+  const jobId = getTextValue(formData, "jobId");
+
+  if (!jobId) {
+    return { error: "ジョブが指定されていません。", success: false };
+  }
+
+  const speakerLabels = formData
+    .getAll("speakerLabel")
+    .map((value) => (typeof value === "string" ? value.trim() : ""));
+  const displayNames = formData
+    .getAll("displayName")
+    .map((value) => (typeof value === "string" ? value.trim() : ""));
+
+  if (speakerLabels.length !== displayNames.length) {
+    return { error: "話者名フォームの内容が不正です。", success: false };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。", success: false };
+    }
+
+    const { data: job, error: jobError } = await supabase
+      .from("transcription_jobs")
+      .select("id")
+      .eq("id", jobId)
+      .single();
+
+    if (jobError || !job) {
+      return { error: "ジョブが見つかりません。", success: false };
+    }
+
+    const rows = speakerLabels
+      .map((speakerLabel, index) => ({
+        display_name: displayNames[index] || "",
+        job_id: job.id,
+        speaker_label: speakerLabel,
+        user_id: user.id,
+      }))
+      .filter((row) => row.speaker_label.length > 0);
+
+    if (rows.length === 0) {
+      return { error: null, success: true };
+    }
+
+    const { error: upsertError } = await supabase
+      .from("transcription_job_speaker_names")
+      .upsert(rows, { onConflict: "job_id,speaker_label" });
+
+    if (upsertError) {
+      return {
+        error: `話者名の保存に失敗しました: ${upsertError.message}`,
+        success: false,
+      };
+    }
+
+    revalidatePath(`/jobs/${job.id}`);
+    return { error: null, success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
+function getTextValue(formData: FormData, key: string) {
+  const value = formData.get(key);
+  return typeof value === "string" ? value.trim() : "";
 }

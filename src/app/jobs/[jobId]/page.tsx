@@ -1,8 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import {
+  QualityNotesForm,
+  type QualityNotesFormValues,
+} from "@/components/quality-notes-form";
+import {
+  SpeakerNamesForm,
+  type SpeakerNameFormRow,
+} from "@/components/speaker-names-form";
 import { TranscriptMarkdown } from "@/components/transcript-markdown";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import type { TranscriptSegment } from "@/lib/transcript";
+import type { SpeakerNameMap, TranscriptSegment } from "@/lib/transcript";
 
 type JobDetailPageProps = {
   params: Promise<{
@@ -66,6 +74,57 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
       chunkIndex: Number(segment.chunk_index),
     })) || [];
 
+  const { data: qualityNote, error: qualityNoteError } = await supabase
+    .from("transcription_job_quality_notes")
+    .select(
+      "recording_environment, misrecognition_notes, speaker_misidentification_notes, timestamp_offset_notes, general_quality_notes",
+    )
+    .eq("job_id", job.id)
+    .maybeSingle();
+
+  if (qualityNoteError) {
+    throw new Error(`Failed to load quality notes: ${qualityNoteError.message}`);
+  }
+
+  const qualityNoteValues: QualityNotesFormValues = {
+    recordingEnvironment: qualityNote?.recording_environment || "",
+    misrecognitionNotes: qualityNote?.misrecognition_notes || "",
+    speakerMisidentificationNotes:
+      qualityNote?.speaker_misidentification_notes || "",
+    timestampOffsetNotes: qualityNote?.timestamp_offset_notes || "",
+    generalQualityNotes: qualityNote?.general_quality_notes || "",
+  };
+
+  const { data: speakerNameRows, error: speakerNamesError } = await supabase
+    .from("transcription_job_speaker_names")
+    .select("speaker_label, display_name")
+    .eq("job_id", job.id)
+    .order("speaker_label", { ascending: true });
+
+  if (speakerNamesError) {
+    throw new Error(`Failed to load speaker names: ${speakerNamesError.message}`);
+  }
+
+  const speakerNames: SpeakerNameMap = {};
+  const speakerLabels = new Set(segments.map((segment) => segment.speakerLabel));
+
+  for (const row of speakerNameRows || []) {
+    const speakerLabel = String(row.speaker_label);
+    const displayName = String(row.display_name || "").trim();
+    speakerLabels.add(speakerLabel);
+
+    if (displayName) {
+      speakerNames[speakerLabel] = displayName;
+    }
+  }
+
+  const speakerFormRows: SpeakerNameFormRow[] = Array.from(speakerLabels)
+    .sort((left, right) => left.localeCompare(right))
+    .map((speakerLabel) => ({
+      displayName: speakerNames[speakerLabel] || "",
+      speakerLabel,
+    }));
+
   return (
     <main className="mx-auto min-h-screen w-full max-w-3xl px-6 py-12">
       <Link className="text-sm font-medium text-zinc-600 hover:text-zinc-950" href="/">
@@ -116,7 +175,18 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
           </p>
         ) : null}
 
-        <TranscriptMarkdown segments={segments} />
+        <QualityNotesForm
+          jobId={job.id}
+          initialValues={qualityNoteValues}
+        />
+
+        <SpeakerNamesForm jobId={job.id} speakers={speakerFormRows} />
+
+        <TranscriptMarkdown
+          exportBaseName={job.original_filename}
+          segments={segments}
+          speakerNames={speakerNames}
+        />
       </section>
     </main>
   );

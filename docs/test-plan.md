@@ -121,6 +121,10 @@ test audio:
 - `chunk_index = 0` のみ
 - job detail page に speaker grouped transcript と Markdown textarea が表示される
 - Markdown copy button が成功する
+- Markdown と txt の保存ボタンで display name 反映済みの transcript を保存できる
+- 長い同一話者発言が自然に結合され、長すぎる場合は段落分けされる
+- job detail page の品質メモに録音環境、誤変換、話者識別ミス、タイムスタンプずれを保存できる
+- job detail page の話者名に `speaker_0 -> さとレックス` のような対応表を保存できる
 
 合格基準:
 
@@ -128,6 +132,9 @@ test audio:
 - worker temporary directory が削除されている
 - `error_message` が null
 - transcript text が音声内容と大きく乖離していない
+- `transcription_job_quality_notes` に job ごとの品質メモが 1 行で保存され、画面 refresh 後も表示される
+- `transcription_job_speaker_names` の display name が transcript 表示と Markdown 出力に反映され、未設定の話者は元の `speaker_label` で表示される
+- タイムスタンプ toggle の状態がコピー内容、Markdown 保存、txt 保存すべてに反映される
 
 ### 2. 3-5 分の複数話者テスト
 
@@ -149,7 +156,7 @@ test audio:
 - `transcription_segments.speaker_label` に 2 種類以上の値が入る
 - `start_sec` / `end_sec` が音声の時系列に沿って並ぶ
 - `chunk_index = 0` のみ
-- job detail page では speaker label が `話者A`, `話者B` のように表示される
+- job detail page では未設定の speaker label が元の label のまま表示され、話者名保存後は display name に置き換わる
 - timestamps toggle の ON/OFF で Markdown 表示が切り替わる
 
 合格基準:

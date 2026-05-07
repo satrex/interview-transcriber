@@ -14,18 +14,19 @@ export type TranscriptBlock = {
   speakerName: string;
   startSec: number;
   endSec: number;
-  text: string;
+  paragraphs: string[];
 };
+
+const DEFAULT_PARAGRAPH_MAX_LENGTH = 360;
 
 export function buildTranscriptBlocks(
   segments: TranscriptSegment[],
   speakerNames: SpeakerNameMap = {},
 ) {
-  const speakerLabels = createSpeakerLabels(segments, speakerNames);
-  const blocks: TranscriptBlock[] = [];
+  const blocks: Array<Omit<TranscriptBlock, "paragraphs"> & { text: string }> = [];
 
   for (const segment of segments) {
-    const speakerName = speakerLabels[segment.speakerLabel] || segment.speakerLabel;
+    const speakerName = speakerNames[segment.speakerLabel] || segment.speakerLabel;
     const previous = blocks.at(-1);
 
     if (previous && previous.speakerLabel === segment.speakerLabel) {
@@ -39,11 +40,14 @@ export function buildTranscriptBlocks(
       speakerName,
       startSec: segment.startSec,
       endSec: segment.endSec,
-      text: segment.text,
+      text: normalizeSegmentText(segment.text),
     });
   }
 
-  return blocks;
+  return blocks.map(({ text, ...block }) => ({
+    ...block,
+    paragraphs: splitIntoParagraphs(text),
+  }));
 }
 
 export function buildTranscriptMarkdown(
@@ -57,8 +61,35 @@ export function buildTranscriptMarkdown(
       const timestamp = options.showTimestamps
         ? `[${formatTimestamp(block.startSec)}] `
         : "";
+      const firstParagraph = block.paragraphs[0] || "";
+      const restParagraphs = block.paragraphs.slice(1);
 
-      return `${timestamp}${block.speakerName}：${block.text}`;
+      return [
+        `${timestamp}**${block.speakerName}**：${firstParagraph}`,
+        ...restParagraphs,
+      ].join("\n\n");
+    })
+    .join("\n\n");
+}
+
+export function buildTranscriptText(
+  blocks: TranscriptBlock[],
+  options: {
+    showTimestamps: boolean;
+  },
+) {
+  return blocks
+    .map((block) => {
+      const timestamp = options.showTimestamps
+        ? `[${formatTimestamp(block.startSec)}] `
+        : "";
+      const firstParagraph = block.paragraphs[0] || "";
+      const restParagraphs = block.paragraphs.slice(1);
+
+      return [
+        `${timestamp}${block.speakerName}：${firstParagraph}`,
+        ...restParagraphs,
+      ].join("\n\n");
     })
     .join("\n\n");
 }
@@ -76,41 +107,9 @@ export function formatTimestamp(totalSeconds: number) {
   return `${pad(minutes)}:${pad(seconds)}`;
 }
 
-function createSpeakerLabels(
-  segments: TranscriptSegment[],
-  speakerNames: SpeakerNameMap,
-) {
-  const labels: SpeakerNameMap = { ...speakerNames };
-  let nextLabelIndex = 0;
-
-  for (const segment of segments) {
-    if (labels[segment.speakerLabel]) {
-      continue;
-    }
-
-    labels[segment.speakerLabel] = `話者${speakerIndexToLabel(nextLabelIndex)}`;
-    nextLabelIndex += 1;
-  }
-
-  return labels;
-}
-
-function speakerIndexToLabel(index: number) {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  let value = index;
-  let label = "";
-
-  do {
-    label = alphabet[value % alphabet.length] + label;
-    value = Math.floor(value / alphabet.length) - 1;
-  } while (value >= 0);
-
-  return label;
-}
-
 function joinText(current: string, next: string) {
-  const trimmedCurrent = current.trim();
-  const trimmedNext = next.trim();
+  const trimmedCurrent = normalizeSegmentText(current);
+  const trimmedNext = normalizeSegmentText(next);
 
   if (!trimmedCurrent) {
     return trimmedNext;
@@ -120,7 +119,102 @@ function joinText(current: string, next: string) {
     return trimmedCurrent;
   }
 
-  return `${trimmedCurrent}\n${trimmedNext}`;
+  if (shouldJoinWithoutSpace(trimmedCurrent, trimmedNext)) {
+    return `${trimmedCurrent}${trimmedNext}`;
+  }
+
+  return `${trimmedCurrent} ${trimmedNext}`;
+}
+
+function normalizeSegmentText(text: string) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function splitIntoParagraphs(
+  text: string,
+  maxLength = DEFAULT_PARAGRAPH_MAX_LENGTH,
+) {
+  const normalized = normalizeSegmentText(text);
+
+  if (!normalized) {
+    return [];
+  }
+
+  if (normalized.length <= maxLength) {
+    return [normalized];
+  }
+
+  const sentences = normalized.match(/[^。！？!?]+[。！？!?」』）)]*|.+$/g) || [
+    normalized,
+  ];
+  const paragraphs: string[] = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    const trimmedSentence = sentence.trim();
+
+    if (!trimmedSentence) {
+      continue;
+    }
+
+    if (current && current.length + trimmedSentence.length > maxLength) {
+      paragraphs.push(current);
+      current = trimmedSentence;
+      continue;
+    }
+
+    current = current
+      ? joinText(current, trimmedSentence)
+      : trimmedSentence;
+  }
+
+  if (current) {
+    paragraphs.push(current);
+  }
+
+  return paragraphs.flatMap((paragraph) => splitLongParagraph(paragraph, maxLength));
+}
+
+function splitLongParagraph(text: string, maxLength: number) {
+  if (text.length <= maxLength) {
+    return [text];
+  }
+
+  const paragraphs: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > maxLength) {
+    const splitAt = findSplitIndex(remaining, maxLength);
+    paragraphs.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
+  }
+
+  if (remaining) {
+    paragraphs.push(remaining);
+  }
+
+  return paragraphs;
+}
+
+function findSplitIndex(text: string, maxLength: number) {
+  const preferredWindowStart = Math.floor(maxLength * 0.65);
+  const searchArea = text.slice(preferredWindowStart, maxLength + 1);
+  const preferredBreaks = ["、", ",", " "];
+
+  for (const breakChar of preferredBreaks) {
+    const index = searchArea.lastIndexOf(breakChar);
+
+    if (index >= 0) {
+      return preferredWindowStart + index + 1;
+    }
+  }
+
+  return maxLength;
+}
+
+function shouldJoinWithoutSpace(current: string, next: string) {
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]$/u.test(current)
+    && /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(next);
 }
 
 function pad(value: number) {
