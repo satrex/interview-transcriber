@@ -31,7 +31,7 @@ export async function markJobAttemptFailed(
 ) {
   const attemptsExhausted = job.attempt_count >= maxAttempts;
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("transcription_jobs")
     .update({
       status: attemptsExhausted ? "failed" : "queued",
@@ -41,10 +41,22 @@ export async function markJobAttemptFailed(
       error_message: message,
       failed_at: attemptsExhausted ? new Date().toISOString() : null,
     })
-    .eq("id", job.id);
+    .eq("id", job.id)
+    .eq("status", "processing")
+    .eq("worker_id", job.worker_id)
+    .eq("attempt_count", job.attempt_count)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     console.error(`Failed to update failed attempt for job ${job.id}:`, error.message);
+    return;
+  }
+
+  if (!data) {
+    console.error(
+      `Job ${job.id} failure update skipped because this worker no longer owns attempt ${job.attempt_count}.`,
+    );
     return;
   }
 
@@ -61,41 +73,62 @@ export async function markJobAttemptFailed(
 
 export async function updateJobProgress(
   supabase: SupabaseClient,
-  jobId: string,
+  job: TranscriptionJob,
   progress: number,
 ) {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("transcription_jobs")
     .update({
       progress,
       locked_at: new Date().toISOString(),
     })
-    .eq("id", jobId);
+    .eq("id", job.id)
+    .eq("status", "processing")
+    .eq("worker_id", job.worker_id)
+    .eq("attempt_count", job.attempt_count)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     throw new Error(`Failed to update job progress: ${error.message}`);
   }
+
+  if (!data) {
+    throw new Error(
+      `Lost ownership of job ${job.id} attempt ${job.attempt_count} while updating progress.`,
+    );
+  }
 }
 
-export async function touchJobLock(supabase: SupabaseClient, jobId: string) {
-  const { error } = await supabase
+export async function touchJobLock(supabase: SupabaseClient, job: TranscriptionJob) {
+  const { data, error } = await supabase
     .from("transcription_jobs")
     .update({
       locked_at: new Date().toISOString(),
     })
-    .eq("id", jobId)
-    .eq("status", "processing");
+    .eq("id", job.id)
+    .eq("status", "processing")
+    .eq("worker_id", job.worker_id)
+    .eq("attempt_count", job.attempt_count)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     throw new Error(`Failed to refresh job lock: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error(
+      `Lost ownership of job ${job.id} attempt ${job.attempt_count} while refreshing lock.`,
+    );
   }
 }
 
 export async function markJobCompleted(
   supabase: SupabaseClient,
-  jobId: string,
+  job: TranscriptionJob,
 ) {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("transcription_jobs")
     .update({
       status: "completed",
@@ -103,9 +136,44 @@ export async function markJobCompleted(
       completed_at: new Date().toISOString(),
       error_message: null,
     })
-    .eq("id", jobId);
+    .eq("id", job.id)
+    .eq("status", "processing")
+    .eq("worker_id", job.worker_id)
+    .eq("attempt_count", job.attempt_count)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
-    throw new Error(`Failed to mark job ${jobId} as completed: ${error.message}`);
+    throw new Error(`Failed to mark job ${job.id} as completed: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error(
+      `Lost ownership of job ${job.id} attempt ${job.attempt_count} while marking completed.`,
+    );
+  }
+}
+
+export async function assertJobClaimActive(
+  supabase: SupabaseClient,
+  job: TranscriptionJob,
+) {
+  const { data, error } = await supabase
+    .from("transcription_jobs")
+    .select("id")
+    .eq("id", job.id)
+    .eq("status", "processing")
+    .eq("worker_id", job.worker_id)
+    .eq("attempt_count", job.attempt_count)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to verify job ownership: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error(
+      `Lost ownership of job ${job.id} attempt ${job.attempt_count}.`,
+    );
   }
 }

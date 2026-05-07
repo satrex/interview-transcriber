@@ -1,7 +1,7 @@
 alter table public.transcription_jobs
-add column attempt_count integer not null default 0 check (attempt_count >= 0);
+add column if not exists attempt_count integer not null default 0 check (attempt_count >= 0);
 
-create index transcription_jobs_retry_claim_idx
+create index if not exists transcription_jobs_retry_claim_idx
   on public.transcription_jobs (status, locked_at, created_at)
   where status in ('queued', 'processing');
 

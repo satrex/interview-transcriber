@@ -3,7 +3,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { WorkerConfig } from "./config.js";
 import { splitAudioIntoChunks } from "./ffmpeg.js";
 import { probeAudio } from "./ffprobe.js";
-import { markJobCompleted, touchJobLock, updateJobProgress } from "./jobs.js";
+import {
+  assertJobClaimActive,
+  markJobCompleted,
+  touchJobLock,
+  updateJobProgress,
+} from "./jobs.js";
 import { clearJobSegments, saveSegments } from "./segments.js";
 import { downloadJobAudio } from "./storage.js";
 import type { TranscriptionJob } from "./supabase.js";
@@ -15,7 +20,7 @@ export async function processJob(
   job: TranscriptionJob,
 ) {
   let jobTmpDir: string | null = null;
-  const heartbeat = startHeartbeat(supabase, job.id, config.lockTimeoutMinutes);
+  const heartbeat = startHeartbeat(supabase, job, config.lockTimeoutMinutes);
 
   try {
     console.log(`[worker] downloading job ${job.id}: ${job.storage_path}`);
@@ -56,6 +61,7 @@ export async function processJob(
     }
 
     const openai = createOpenAIClient(config.openaiApiKey);
+    await assertJobClaimActive(supabase, job);
     await clearJobSegments(supabase, job.id);
 
     for (const chunk of chunks) {
@@ -65,7 +71,7 @@ export async function processJob(
         `[worker] transcribing chunk ${chunk.chunkIndex} starting at ${chunkStartSec}s`,
       );
 
-      await touchJobLock(supabase, job.id);
+      await touchJobLock(supabase, job);
 
       const segments = await transcribeChunk({
         openai,
@@ -74,17 +80,18 @@ export async function processJob(
         chunkStartSec,
       });
 
+      await assertJobClaimActive(supabase, job);
       await saveSegments(supabase, job.id, segments);
 
       const progress = calculateProgress(chunk.chunkIndex + 1, chunks.length);
-      await updateJobProgress(supabase, job.id, progress);
+      await updateJobProgress(supabase, job, progress);
 
       console.log(
         `[worker] saved ${segments.length} segment(s) for chunk ${chunk.chunkIndex}; progress ${progress}%`,
       );
     }
 
-    await markJobCompleted(supabase, job.id);
+    await markJobCompleted(supabase, job);
     console.log(`[worker] completed job ${job.id}`);
   } finally {
     clearInterval(heartbeat);
@@ -98,7 +105,7 @@ export async function processJob(
 
 function startHeartbeat(
   supabase: SupabaseClient,
-  jobId: string,
+  job: TranscriptionJob,
   lockTimeoutMinutes: number,
 ) {
   const intervalMs = Math.max(
@@ -107,9 +114,9 @@ function startHeartbeat(
   );
 
   return setInterval(() => {
-    touchJobLock(supabase, jobId).catch((error) => {
+    touchJobLock(supabase, job).catch((error) => {
       console.error(
-        `[worker] failed to refresh lock for job ${jobId}:`,
+        `[worker] failed to refresh lock for job ${job.id}:`,
         error instanceof Error ? error.message : error,
       );
     });
