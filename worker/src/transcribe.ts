@@ -8,6 +8,7 @@ export type NormalizedSegment = {
   endSec: number;
   text: string;
   chunkIndex: number;
+  segmentIndex: number;
 };
 
 export type TranscribedChunk = {
@@ -48,6 +49,7 @@ export async function transcribeChunk(options: {
 
   const segments: NormalizedSegment[] = [];
   let skippedSegmentsCount = 0;
+  let segmentIndex = 0;
 
   for (const segment of transcription.segments) {
     const normalized = normalizeSegment(
@@ -61,7 +63,11 @@ export async function transcribeChunk(options: {
       continue;
     }
 
-    segments.push(normalized);
+    segments.push({
+      ...normalized,
+      segmentIndex,
+    });
+    segmentIndex += 1;
   }
 
   return {
@@ -75,7 +81,7 @@ function normalizeSegment(
   segment: NonNullable<DiarizedTranscriptionResponse["segments"]>[number],
   chunkIndex: number,
   chunkStartSec: number,
-): NormalizedSegment | null {
+): Omit<NormalizedSegment, "segmentIndex"> | null {
   if (typeof segment.start !== "number" || typeof segment.end !== "number") {
     throw new Error(`OpenAI segment is missing timestamps for chunk ${chunkIndex}.`);
   }

@@ -23,6 +23,7 @@ async function main() {
   console.log(
     `[worker] claimed job ${job.id} attempt ${job.attempt_count}/${config.maxAttempts}`,
   );
+  console.log(`[worker] started job ${job.id}`);
 
   try {
     await processJob(supabase, config, job);

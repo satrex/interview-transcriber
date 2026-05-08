@@ -24,7 +24,7 @@ export async function saveSegments(
     return;
   }
 
-  const { error } = await supabase.from("transcription_segments").insert(
+  const { error } = await supabase.from("transcription_segments").upsert(
     segments.map((segment) => ({
       job_id: jobId,
       speaker_label: segment.speakerLabel,
@@ -32,7 +32,11 @@ export async function saveSegments(
       end_sec: segment.endSec,
       text: segment.text,
       chunk_index: segment.chunkIndex,
+      segment_index: segment.segmentIndex,
     })),
+    {
+      onConflict: "job_id,chunk_index,segment_index",
+    },
   );
 
   if (error) {
