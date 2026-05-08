@@ -10,6 +10,12 @@ export type NormalizedSegment = {
   chunkIndex: number;
 };
 
+export type TranscribedChunk = {
+  segments: NormalizedSegment[];
+  skippedSegmentsCount: number;
+  sourceSegmentsCount: number;
+};
+
 type DiarizedTranscriptionResponse = {
   segments?: Array<{
     speaker?: string;
@@ -28,7 +34,7 @@ export async function transcribeChunk(options: {
   model: string;
   chunk: AudioChunk;
   chunkStartSec: number;
-}) {
+}): Promise<TranscribedChunk> {
   const transcription = (await options.openai.audio.transcriptions.create({
     file: createReadStream(options.chunk.path),
     model: options.model,
@@ -40,16 +46,36 @@ export async function transcribeChunk(options: {
     throw new Error("OpenAI transcription response did not include segments.");
   }
 
-  return transcription.segments.map((segment) =>
-    normalizeSegment(segment, options.chunk.chunkIndex, options.chunkStartSec),
-  );
+  const segments: NormalizedSegment[] = [];
+  let skippedSegmentsCount = 0;
+
+  for (const segment of transcription.segments) {
+    const normalized = normalizeSegment(
+      segment,
+      options.chunk.chunkIndex,
+      options.chunkStartSec,
+    );
+
+    if (!normalized) {
+      skippedSegmentsCount += 1;
+      continue;
+    }
+
+    segments.push(normalized);
+  }
+
+  return {
+    segments,
+    skippedSegmentsCount,
+    sourceSegmentsCount: transcription.segments.length,
+  };
 }
 
 function normalizeSegment(
   segment: NonNullable<DiarizedTranscriptionResponse["segments"]>[number],
   chunkIndex: number,
   chunkStartSec: number,
-): NormalizedSegment {
+): NormalizedSegment | null {
   if (typeof segment.start !== "number" || typeof segment.end !== "number") {
     throw new Error(`OpenAI segment is missing timestamps for chunk ${chunkIndex}.`);
   }
@@ -57,7 +83,7 @@ function normalizeSegment(
   const text = segment.text?.trim();
 
   if (!text) {
-    throw new Error(`OpenAI segment is missing text for chunk ${chunkIndex}.`);
+    return null;
   }
 
   return {

@@ -5,6 +5,7 @@ import {
   QualityNotesForm,
   type QualityNotesFormValues,
 } from "@/components/quality-notes-form";
+import { SegmentAudioPlayer } from "@/components/segment-audio-player";
 import { SpeakerAnalysisPanel } from "@/components/speaker-analysis-panel";
 import {
   SpeakerNamesForm,
@@ -12,7 +13,9 @@ import {
 } from "@/components/speaker-names-form";
 import { TranscriptMarkdown } from "@/components/transcript-markdown";
 import { analyzeSpeakers } from "@/lib/speaker-analysis";
+import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { createAudioSignedUrl } from "@/lib/storage";
 import type { SpeakerNameMap, TranscriptSegment } from "@/lib/transcript";
 
 type JobDetailPageProps = {
@@ -47,7 +50,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
   const { data: job, error } = await supabase
     .from("transcription_jobs")
     .select(
-      "id, original_filename, status, progress, error_message, storage_path, expected_speaker_count, created_at, updated_at",
+      "id, original_filename, status, progress, skipped_segments_count, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at",
     )
     .eq("id", jobId)
     .single();
@@ -131,6 +134,12 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
     segments,
     Number(job.expected_speaker_count || 2),
   );
+  const adminSupabase = createAdminSupabaseClient();
+  const audioSignedUrl = await createAudioSignedUrl({
+    bucket: job.storage_bucket,
+    path: job.storage_path,
+    storage: adminSupabase.storage,
+  });
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-3xl px-6 py-12">
@@ -164,6 +173,12 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
             </dd>
           </div>
           <div>
+            <dt className="text-zinc-500">Skipped empty segments</dt>
+            <dd className="mt-1 font-medium text-zinc-950">
+              {job.skipped_segments_count || 0}
+            </dd>
+          </div>
+          <div>
             <dt className="text-zinc-500">Created</dt>
             <dd className="mt-1 font-medium text-zinc-950">
               {new Date(job.created_at).toLocaleString()}
@@ -191,6 +206,12 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
         <SpeakerAnalysisPanel analysis={speakerAnalysis} jobId={job.id} />
 
         <SpeakerNamesForm jobId={job.id} speakers={speakerFormRows} />
+
+        <SegmentAudioPlayer
+          audioUrl={audioSignedUrl}
+          segments={segments}
+          speakerNames={speakerNames}
+        />
 
         <TranscriptMarkdown
           exportBaseName={job.original_filename}

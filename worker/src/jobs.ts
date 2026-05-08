@@ -75,13 +75,24 @@ export async function updateJobProgress(
   supabase: SupabaseClient,
   job: TranscriptionJob,
   progress: number,
+  skippedSegmentsCount?: number,
 ) {
+  const updateValues: {
+    locked_at: string;
+    progress: number;
+    skipped_segments_count?: number;
+  } = {
+    progress,
+    locked_at: new Date().toISOString(),
+  };
+
+  if (typeof skippedSegmentsCount === "number") {
+    updateValues.skipped_segments_count = skippedSegmentsCount;
+  }
+
   const { data, error } = await supabase
     .from("transcription_jobs")
-    .update({
-      progress,
-      locked_at: new Date().toISOString(),
-    })
+    .update(updateValues)
     .eq("id", job.id)
     .eq("status", "processing")
     .eq("worker_id", job.worker_id)

@@ -1,5 +1,7 @@
 const ALLOWED_AUDIO_EXTENSIONS = new Set(["mp3", "m4a", "wav"]);
 
+const AUDIO_SIGNED_URL_EXPIRES_IN_SECONDS = 60 * 60 * 6;
+
 export function getAudioBucketName() {
   return process.env.SUPABASE_AUDIO_BUCKET || "audio-uploads";
 }
@@ -29,6 +31,34 @@ export function validateAudioFile(file: File) {
 
 export function buildJobSourceStoragePath(jobId: string, originalFilename: string) {
   return `jobs/${jobId}/source/${toSafeStorageFilename(originalFilename)}`;
+}
+
+export async function createAudioSignedUrl(options: {
+  bucket: string;
+  path: string;
+  storage: {
+    from: (bucket: string) => {
+      createSignedUrl: (
+        path: string,
+        expiresIn: number,
+      ) => Promise<{
+        data: { signedUrl: string } | null;
+        error: { message: string } | null;
+      }>;
+    };
+  };
+}) {
+  const { data, error } = await options.storage
+    .from(options.bucket)
+    .createSignedUrl(options.path, AUDIO_SIGNED_URL_EXPIRES_IN_SECONDS);
+
+  if (error || !data?.signedUrl) {
+    throw new Error(
+      `音声ファイルの署名付きURLを作成できませんでした: ${error?.message || "unknown error"}`,
+    );
+  }
+
+  return data.signedUrl;
 }
 
 function getFileExtension(filename: string) {

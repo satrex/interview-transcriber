@@ -14,6 +14,13 @@ import { downloadJobAudio } from "./storage.js";
 import type { TranscriptionJob } from "./supabase.js";
 import { createOpenAIClient, transcribeChunk } from "./transcribe.js";
 
+export class PermanentJobFailure extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermanentJobFailure";
+  }
+}
+
 export async function processJob(
   supabase: SupabaseClient,
   config: WorkerConfig,
@@ -63,6 +70,10 @@ export async function processJob(
     const openai = createOpenAIClient(config.openaiApiKey);
     await assertJobClaimActive(supabase, job);
     await clearJobSegments(supabase, job.id);
+    await updateJobProgress(supabase, job, job.progress, 0);
+
+    let totalSavedSegmentsCount = 0;
+    let totalSkippedSegmentsCount = 0;
 
     for (const chunk of chunks) {
       const chunkStartSec = chunk.chunkIndex * config.audioChunkSeconds;
@@ -73,26 +84,54 @@ export async function processJob(
 
       await touchJobLock(supabase, job);
 
-      const segments = await transcribeChunk({
+      const transcribed = await transcribeChunk({
         openai,
         model: config.openaiTranscriptionModel,
         chunk,
         chunkStartSec,
       });
+      const { segments } = transcribed;
+      totalSavedSegmentsCount += segments.length;
+      totalSkippedSegmentsCount += transcribed.skippedSegmentsCount;
+
+      if (transcribed.skippedSegmentsCount > 0) {
+        console.warn(
+          `[worker] skipped ${transcribed.skippedSegmentsCount} empty segment(s) for chunk ${chunk.chunkIndex}`,
+        );
+      }
+
+      if (segments.length === 0) {
+        console.warn(
+          `[worker] chunk ${chunk.chunkIndex} produced 0 usable segment(s) from ${transcribed.sourceSegmentsCount} source segment(s); continuing`,
+        );
+      }
 
       await assertJobClaimActive(supabase, job);
       await saveSegments(supabase, job.id, segments);
 
       const progress = calculateProgress(chunk.chunkIndex + 1, chunks.length);
-      await updateJobProgress(supabase, job, progress);
+      await updateJobProgress(
+        supabase,
+        job,
+        progress,
+        totalSkippedSegmentsCount,
+      );
 
       console.log(
-        `[worker] saved ${segments.length} segment(s) for chunk ${chunk.chunkIndex}; progress ${progress}%`,
+        `[worker] saved ${segments.length} segment(s) for chunk ${chunk.chunkIndex}; skipped ${transcribed.skippedSegmentsCount}; progress ${progress}%`,
+      );
+    }
+
+    if (totalSavedSegmentsCount === 0) {
+      throw new PermanentJobFailure(
+        `OpenAI transcription produced 0 usable segments across ${chunks.length} chunk(s); skipped ${totalSkippedSegmentsCount} empty segment(s).`,
       );
     }
 
     await markJobCompleted(supabase, job);
-    console.log(`[worker] completed job ${job.id}`);
+    console.log(
+      `[worker] completed job ${job.id}; saved ${totalSavedSegmentsCount} segment(s), skipped ${totalSkippedSegmentsCount} empty segment(s)`,
+    );
   } finally {
     clearInterval(heartbeat);
 

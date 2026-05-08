@@ -1,6 +1,6 @@
 import { loadConfig } from "./config.js";
 import { claimQueuedJob, markJobAttemptFailed } from "./jobs.js";
-import { processJob } from "./processor.js";
+import { PermanentJobFailure, processJob } from "./processor.js";
 import { createSupabaseClient } from "./supabase.js";
 
 async function main() {
@@ -29,7 +29,10 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown worker error";
     console.error(`[worker] job ${job.id} failed: ${message}`);
-    await markJobAttemptFailed(supabase, job, message, config.maxAttempts);
+    const maxAttempts = error instanceof PermanentJobFailure
+      ? job.attempt_count
+      : config.maxAttempts;
+    await markJobAttemptFailed(supabase, job, message, maxAttempts);
     process.exitCode = 1;
   }
 }

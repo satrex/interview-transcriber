@@ -10,9 +10,11 @@ export type SpeakerAnalysis = {
 
 export type SpeakerStats = {
   speakerLabel: string;
+  characterCount: number;
+  requiresReview: boolean;
   segmentCount: number;
+  textFillerCentered: boolean;
   totalDurationSec: number;
-  textOnlyFiller: boolean;
 };
 
 export type NoiseSpeakerCandidate = SpeakerStats & {
@@ -43,18 +45,8 @@ export function analyzeSpeakers(
   segments: TranscriptSegment[],
   expectedSpeakerCount: number,
 ): SpeakerAnalysis {
-  const stats = buildSpeakerStats(segments);
-  const noiseSpeakerCandidates = stats
-    .map((speakerStats) => ({
-      ...speakerStats,
-      reasons: buildNoiseCandidateReasons(speakerStats),
-    }))
-    .filter((candidate) => candidate.reasons.length > 0);
-  const candidateLabels = new Set(
-    noiseSpeakerCandidates.map((candidate) => candidate.speakerLabel),
-  );
-  const mergeTargetOptions = stats
-    .filter((speakerStats) => !candidateLabels.has(speakerStats.speakerLabel))
+  const rawStats = buildSpeakerStats(segments);
+  const mergeTargetOptions = [...rawStats]
     .sort((left, right) => {
       const durationDiff = right.totalDurationSec - left.totalDurationSec;
 
@@ -66,6 +58,19 @@ export function analyzeSpeakers(
     })
     .slice(0, expectedSpeakerCount)
     .map((speakerStats) => speakerStats.speakerLabel);
+  const mergeTargetLabels = new Set(mergeTargetOptions);
+  const stats = rawStats.map((speakerStats) => ({
+    ...speakerStats,
+    requiresReview:
+      rawStats.length > expectedSpeakerCount
+      && !mergeTargetLabels.has(speakerStats.speakerLabel),
+  }));
+  const noiseSpeakerCandidates = stats
+    .map((speakerStats) => ({
+      ...speakerStats,
+      reasons: buildNoiseCandidateReasons(speakerStats),
+    }))
+    .filter((candidate) => candidate.reasons.length > 0);
 
   return {
     expectedSpeakerCount,
@@ -79,19 +84,22 @@ export function analyzeSpeakers(
 function buildSpeakerStats(segments: TranscriptSegment[]) {
   const statsBySpeaker = new Map<
     string,
-    SpeakerStats & { fillerSegmentCount: number }
+    Omit<SpeakerStats, "requiresReview" | "textFillerCentered"> & {
+      fillerSegmentCount: number;
+    }
   >();
 
   for (const segment of segments) {
     const current = statsBySpeaker.get(segment.speakerLabel) || {
+      characterCount: 0,
       fillerSegmentCount: 0,
       segmentCount: 0,
       speakerLabel: segment.speakerLabel,
-      textOnlyFiller: false,
       totalDurationSec: 0,
     };
 
     current.segmentCount += 1;
+    current.characterCount += countCharacters(segment.text);
     current.totalDurationSec += Math.max(0, segment.endSec - segment.startSec);
 
     if (isFillerOnlyText(segment.text)) {
@@ -104,8 +112,9 @@ function buildSpeakerStats(segments: TranscriptSegment[]) {
   return Array.from(statsBySpeaker.values())
     .map(({ fillerSegmentCount, ...stats }) => ({
       ...stats,
-      textOnlyFiller:
-        stats.segmentCount > 0 && fillerSegmentCount === stats.segmentCount,
+      requiresReview: false,
+      textFillerCentered:
+        stats.segmentCount > 0 && fillerSegmentCount / stats.segmentCount >= 0.7,
       totalDurationSec: roundDuration(stats.totalDurationSec),
     }))
     .sort((left, right) => left.speakerLabel.localeCompare(right.speakerLabel));
@@ -122,11 +131,15 @@ function buildNoiseCandidateReasons(stats: SpeakerStats) {
     reasons.push("segment数が2以下");
   }
 
-  if (stats.textOnlyFiller) {
-    reasons.push("本文が相づち・フィラーのみ");
+  if (stats.textFillerCentered) {
+    reasons.push("本文が相づち・フィラー中心");
   }
 
   return reasons;
+}
+
+function countCharacters(text: string) {
+  return text.replace(/\s+/g, "").length;
 }
 
 function isFillerOnlyText(text: string) {
