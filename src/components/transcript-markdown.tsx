@@ -38,9 +38,6 @@ export function TranscriptMarkdown({
   const [highlightedEditSegmentId, setHighlightedEditSegmentId] = useState<
     string | null
   >(null);
-  const [highlightedPreviewSegmentId, setHighlightedPreviewSegmentId] = useState<
-    string | null
-  >(null);
   const [showTimestamps, setShowTimestamps] = useState(true);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
     "idle",
@@ -51,6 +48,7 @@ export function TranscriptMarkdown({
 
   const effectiveSegments = buildEffectiveSegments(segments, segmentEdits);
   const blocks = buildTranscriptBlocks(effectiveSegments, speakerNames);
+  const previewBlocks = buildPreviewBlocks(effectiveSegments, speakerNames);
   const markdown = buildTranscriptMarkdown(blocks, { showTimestamps });
   const plainText = buildTranscriptText(blocks, { showTimestamps });
   const safeExportBaseName = buildSafeFileName(exportBaseName);
@@ -182,12 +180,8 @@ export function TranscriptMarkdown({
     });
   }
 
-  function jumpToSegment(segmentId: string, target: "edit" | "preview") {
-    const element = document.getElementById(
-      target === "edit"
-        ? getSegmentEditDomId(segmentId)
-        : getSegmentPreviewDomId(segmentId),
-    );
+  function jumpToSegment(segmentId: string) {
+    const element = document.getElementById(getSegmentEditDomId(segmentId));
 
     if (!element) {
       return;
@@ -197,15 +191,19 @@ export function TranscriptMarkdown({
       clearTimeout(highlightTimeoutRef.current);
     }
 
-    setHighlightedEditSegmentId(target === "edit" ? segmentId : null);
-    setHighlightedPreviewSegmentId(target === "preview" ? segmentId : null);
+    setHighlightedEditSegmentId(segmentId);
     element.scrollIntoView({ behavior: "smooth", block: "center" });
 
     highlightTimeoutRef.current = setTimeout(() => {
       setHighlightedEditSegmentId(null);
-      setHighlightedPreviewSegmentId(null);
       highlightTimeoutRef.current = null;
     }, 3000);
+  }
+
+  function jumpToOverallPreview() {
+    document
+      .getElementById("transcript-overall-preview")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   if (segments.length === 0) {
@@ -301,7 +299,7 @@ export function TranscriptMarkdown({
               isActive={activeSegmentId === segment.id}
               isHighlighted={highlightedEditSegmentId === segment.id}
               jobId={jobId}
-              onJumpToPreview={() => jumpToSegment(segment.id, "preview")}
+              onJumpToPreview={jumpToOverallPreview}
               onPlay={() => void playSegment(segment)}
               onUnsavedChange={updateSegmentUnsaved}
               segment={segment}
@@ -313,60 +311,52 @@ export function TranscriptMarkdown({
         })}
       </div>
 
-      <div className="mt-8 border-t border-zinc-200 pt-8">
+      <div
+        id="transcript-overall-preview"
+        className="mt-8 scroll-mt-6 border-t border-zinc-200 pt-8"
+      >
         <h3 className="text-lg font-semibold text-zinc-950">Markdown preview</h3>
         <p className="mt-1 text-sm text-zinc-500">
           skipされたsegmentは出力から省略し、編集済みsegmentはedited_textを使います。
         </p>
       </div>
 
-      <div className="mt-6 space-y-4">
-        {effectiveSegments.map((segment) => {
-          const speakerName =
-            speakerNames[segment.speakerLabel] || segment.speakerLabel;
-          const isHighlighted = highlightedPreviewSegmentId === segment.id;
-
-          return (
-            <article
-              key={segment.id}
-              id={getSegmentPreviewDomId(segment.id)}
-              className={`scroll-mt-6 rounded-md border p-4 transition ${
-                isHighlighted
-                  ? "border-amber-300 bg-amber-50"
-                  : "border-zinc-200 bg-zinc-50"
-              }`}
-            >
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 flex-1 text-sm leading-7 text-zinc-900">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    {showTimestamps ? (
-                      <span className="font-mono text-xs text-zinc-500">
-                        [{formatTimestamp(segment.startSec)}]
-                      </span>
-                    ) : null}
-                    <span className="font-semibold">{speakerName}：</span>
-                  </div>
-                  <p className="mt-2 whitespace-pre-wrap">{segment.text}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => jumpToSegment(segment.id, "edit")}
-                  className="inline-flex min-h-9 w-fit shrink-0 items-center justify-center rounded-md border border-zinc-300 bg-white px-3 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
-                >
-                  編集へ
-                </button>
-              </div>
-            </article>
-          );
-        })}
-      </div>
-
-      <textarea
-        readOnly
-        value={markdown}
-        className="mt-6 min-h-64 w-full rounded-md border border-zinc-200 bg-white p-4 font-mono text-sm leading-6 text-zinc-800"
+      <div
+        className="mt-6 min-h-64 rounded-md border border-zinc-200 bg-white p-4 text-sm leading-7 text-zinc-900"
         aria-label="Markdown preview"
-      />
+      >
+        {previewBlocks.map((block) => (
+          <div key={`${block.speakerLabel}-${block.startSec}`} className="mb-5">
+            <p className="font-semibold text-zinc-950">
+              {showTimestamps ? (
+                <span className="mr-2 font-mono text-xs font-normal text-zinc-500">
+                  [{formatTimestamp(block.startSec)}]
+                </span>
+              ) : null}
+              {block.speakerName}：
+            </p>
+            <p className="mt-1">
+              {block.segments.flatMap((segment) =>
+                splitPreviewSentences(segment.text).map((sentence, index) => (
+                  <a
+                    key={`${segment.id}-${index}`}
+                    href={`#${getSegmentEditDomId(segment.id)}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      jumpToSegment(segment.id);
+                    }}
+                    className="rounded-sm underline decoration-zinc-300 decoration-1 underline-offset-2 transition hover:bg-amber-50 hover:decoration-amber-500 focus:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-300"
+                    title={`${formatTimestamp(segment.startSec)} の編集へ移動`}
+                  >
+                    {sentence}
+                    {" "}
+                  </a>
+                )),
+              )}
+            </p>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -505,7 +495,7 @@ function SegmentEditForm({
                 onClick={onJumpToPreview}
                 className="inline-flex min-h-9 items-center justify-center rounded-md border border-zinc-300 bg-white px-3 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
               >
-                プレビューへ
+                全体プレビューへ
               </button>
             ) : null}
             <span className="font-mono text-xs text-zinc-500">
@@ -618,6 +608,46 @@ function buildEffectiveSegments(
   });
 }
 
+function buildPreviewBlocks(
+  segments: TranscriptSegment[],
+  speakerNames: SpeakerNameMap,
+) {
+  const blocks: Array<{
+    speakerLabel: string;
+    speakerName: string;
+    startSec: number;
+    segments: TranscriptSegment[];
+  }> = [];
+
+  for (const segment of segments) {
+    const previous = blocks.at(-1);
+
+    if (previous && previous.speakerLabel === segment.speakerLabel) {
+      previous.segments.push(segment);
+      continue;
+    }
+
+    blocks.push({
+      speakerLabel: segment.speakerLabel,
+      speakerName: speakerNames[segment.speakerLabel] || segment.speakerLabel,
+      startSec: segment.startSec,
+      segments: [segment],
+    });
+  }
+
+  return blocks;
+}
+
+function splitPreviewSentences(text: string) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+
+  if (!normalized) {
+    return [];
+  }
+
+  return normalized.match(/[^。！？!?]+[。！？!?」』）)]*|.+$/g) || [normalized];
+}
+
 function downloadTextFile(fileName: string, text: string, type: string) {
   const blob = new Blob([text], { type: `${type};charset=utf-8` });
   const url = URL.createObjectURL(blob);
@@ -636,8 +666,4 @@ function buildSafeFileName(fileName: string) {
 
 function getSegmentEditDomId(segmentId: string) {
   return `segment-edit-${segmentId}`;
-}
-
-function getSegmentPreviewDomId(segmentId: string) {
-  return `segment-preview-${segmentId}`;
 }
