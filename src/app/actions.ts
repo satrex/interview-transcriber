@@ -40,6 +40,13 @@ export type SegmentEditActionState = {
   success: boolean;
 };
 
+export type SegmentSkipActionState = {
+  error: string | null;
+  savedEditedText?: string | null;
+  savedIsSkipped?: boolean;
+  success: boolean;
+};
+
 export async function loginWithPassword(
   _previousState: LoginActionState,
   formData: FormData,
@@ -364,7 +371,6 @@ export async function saveSegmentEdit(
   const jobId = getTextValue(formData, "jobId");
   const segmentId = getTextValue(formData, "segmentId");
   const editedText = getRawTextValue(formData, "editedText");
-  const isSkipped = formData.get("isSkipped") === "on";
   const intent = getTextValue(formData, "intent");
 
   if (!jobId || !segmentId) {
@@ -400,7 +406,6 @@ export async function saveSegmentEdit(
           }
         : {
             edited_text: editedText.trim() ? editedText : null,
-            is_skipped: isSkipped,
           };
 
     const { error: upsertError } = await supabase
@@ -431,6 +436,88 @@ export async function saveSegmentEdit(
     if (savedEditError || !savedEdit) {
       return {
         error: `segment編集の再読み込みに失敗しました: ${savedEditError?.message || "not found"}`,
+        success: false,
+      };
+    }
+
+    revalidatePath(`/jobs/${jobId}`);
+    return {
+      error: null,
+      savedEditedText:
+        typeof savedEdit.edited_text === "string" && savedEdit.edited_text.trim()
+          ? savedEdit.edited_text
+          : null,
+      savedIsSkipped: Boolean(savedEdit.is_skipped),
+      success: true,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
+export async function saveSegmentSkip(
+  _previousState: SegmentSkipActionState,
+  formData: FormData,
+): Promise<SegmentSkipActionState> {
+  const jobId = getTextValue(formData, "jobId");
+  const segmentId = getTextValue(formData, "segmentId");
+  const isSkipped = formData.get("isSkipped") === "true";
+
+  if (!jobId || !segmentId) {
+    return { error: "ジョブまたはsegmentが指定されていません。", success: false };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。", success: false };
+    }
+
+    const { data: segment, error: segmentError } = await supabase
+      .from("transcription_segments")
+      .select("id, job_id")
+      .eq("id", segmentId)
+      .eq("job_id", jobId)
+      .single();
+
+    if (segmentError || !segment) {
+      return { error: "segmentが見つかりません。", success: false };
+    }
+
+    const { error: upsertError } = await supabase
+      .from("transcription_segment_edits")
+      .upsert(
+        {
+          is_skipped: isSkipped,
+          job_id: jobId,
+          segment_id: segment.id,
+          user_id: user.id,
+        },
+        { onConflict: "segment_id" },
+      );
+
+    if (upsertError) {
+      return {
+        error: `skip状態の保存に失敗しました: ${upsertError.message}`,
+        success: false,
+      };
+    }
+
+    const { data: savedEdit, error: savedEditError } = await supabase
+      .from("transcription_segment_edits")
+      .select("edited_text, is_skipped")
+      .eq("segment_id", segment.id)
+      .maybeSingle();
+
+    if (savedEditError || !savedEdit) {
+      return {
+        error: `skip状態の再読み込みに失敗しました: ${savedEditError?.message || "not found"}`,
         success: false,
       };
     }

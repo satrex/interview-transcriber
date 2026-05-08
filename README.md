@@ -2,6 +2,19 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 Testing guide: see [docs/test-plan.md](docs/test-plan.md).
 
+## Audio upload compression
+
+Audio files are re-encoded in the browser before upload with ffmpeg.wasm:
+
+- m4a
+- mono
+- 16kHz
+- 32kbps
+
+The ffmpeg core files are copied from `node_modules/@ffmpeg/core` to
+`public/ffmpeg` by `npm install` via the `postinstall` script. The generated
+`public/ffmpeg` files are not committed.
+
 ## Getting Started
 
 First, run the development server:

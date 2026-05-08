@@ -1,8 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { saveSegmentEdit, type SegmentEditActionState } from "@/app/actions";
+import {
+  saveSegmentEdit,
+  saveSegmentSkip,
+  type SegmentEditActionState,
+  type SegmentSkipActionState,
+} from "@/app/actions";
 import {
   buildTranscriptBlocks,
   buildTranscriptMarkdown,
@@ -48,8 +53,13 @@ export function TranscriptMarkdown({
   const [unsavedSegments, setUnsavedSegments] = useState<Record<string, boolean>>(
     {},
   );
+  const [effectiveSegmentEditMap, setEffectiveSegmentEditMap] =
+    useState<SegmentEditMap>(segmentEdits);
 
-  const effectiveSegments = buildEffectiveSegments(segments, segmentEdits);
+  const effectiveSegments = buildEffectiveSegments(
+    segments,
+    effectiveSegmentEditMap,
+  );
   const blocks = buildTranscriptBlocks(effectiveSegments, speakerNames);
   const previewBlocks = buildPreviewBlocks(effectiveSegments, speakerNames);
   const markdown = buildTranscriptMarkdown(blocks, { showTimestamps });
@@ -183,6 +193,16 @@ export function TranscriptMarkdown({
     });
   }
 
+  function updateLocalSegmentEdit(
+    segmentId: string,
+    updater: (current: SegmentEdit | undefined) => SegmentEdit,
+  ) {
+    setEffectiveSegmentEditMap((current) => ({
+      ...current,
+      [segmentId]: updater(current[segmentId]),
+    }));
+  }
+
   function jumpToSegment(segmentId: string, target: "edit" | "preview") {
     const element = document.getElementById(
       target === "edit"
@@ -293,7 +313,7 @@ export function TranscriptMarkdown({
 
       <div className="mt-6 space-y-3">
         {segments.map((segment) => {
-          const edit = segmentEdits[segment.id];
+          const edit = effectiveSegmentEditMap[segment.id];
 
           return (
             <SegmentEditForm
@@ -303,6 +323,9 @@ export function TranscriptMarkdown({
               isHighlighted={highlightedEditSegmentId === segment.id}
               jobId={jobId}
               onJumpToPreview={() => jumpToSegment(segment.id, "preview")}
+              onLocalEditChange={(updater) =>
+                updateLocalSegmentEdit(segment.id, updater)
+              }
               onPlay={() => void playSegment(segment)}
               onUnsavedChange={updateSegmentUnsaved}
               segment={segment}
@@ -390,6 +413,9 @@ type SegmentEditFormProps = {
   isHighlighted: boolean;
   jobId: string;
   onJumpToPreview: () => void;
+  onLocalEditChange: (
+    updater: (current: SegmentEdit | undefined) => SegmentEdit,
+  ) => void;
   onPlay: () => void;
   onUnsavedChange: (segmentId: string, isUnsaved: boolean) => void;
   segment: TranscriptSegment;
@@ -402,6 +428,7 @@ function SegmentEditForm({
   isHighlighted,
   jobId,
   onJumpToPreview,
+  onLocalEditChange,
   onPlay,
   onUnsavedChange,
   segment,
@@ -412,35 +439,73 @@ function SegmentEditForm({
   const isSkipped = edit?.isSkipped || false;
   const effectiveText = editedText ?? segment.text;
   const [actionState, setActionState] = useState(initialSegmentEditState);
+  const [skipActionState, setSkipActionState] =
+    useState<SegmentSkipActionState>({
+      error: null,
+      success: false,
+    });
   const [pending, setPending] = useState(false);
+  const [skipPending, setSkipPending] = useState(false);
   const [savedEditedText, setSavedEditedText] = useState<string | null>(
     editedText,
   );
-  const [savedSkipped, setSavedSkipped] = useState(isSkipped);
   const [textValue, setTextValue] = useState(effectiveText);
   const [skippedValue, setSkippedValue] = useState(isSkipped);
   const hasSavedEdit = savedEditedText !== null;
   const savedText = savedEditedText ?? segment.text;
-  const hasUnsavedChanges =
-    textValue !== savedText || skippedValue !== savedSkipped;
+  const hasUnsavedChanges = textValue !== savedText;
 
   function updateTextValue(nextText: string) {
     setTextValue(nextText);
-    onUnsavedChange(
-      segment.id,
-      nextText !== savedText || skippedValue !== savedSkipped,
-    );
+    onUnsavedChange(segment.id, nextText !== savedText);
   }
 
-  function updateSkippedValue(nextSkipped: boolean) {
+  async function updateSkippedValue(nextSkipped: boolean) {
+    const previousSkipped = skippedValue;
+
     setSkippedValue(nextSkipped);
-    onUnsavedChange(
-      segment.id,
-      textValue !== savedText || nextSkipped !== savedSkipped,
+    setSkipPending(true);
+    setSkipActionState({ error: null, success: false });
+    onLocalEditChange((current) => ({
+      editedText: current ? current.editedText : savedEditedText,
+      isSkipped: nextSkipped,
+    }));
+
+    const formData = new FormData();
+    formData.set("jobId", jobId);
+    formData.set("segmentId", segment.id);
+    formData.set("isSkipped", String(nextSkipped));
+
+    const result = await saveSegmentSkip(
+      { error: null, success: false },
+      formData,
     );
+
+    setSkipPending(false);
+    setSkipActionState(result);
+
+    if (!result.success) {
+      setSkippedValue(previousSkipped);
+      onLocalEditChange((current) => ({
+        editedText: current ? current.editedText : savedEditedText,
+        isSkipped: previousSkipped,
+      }));
+      return;
+    }
+
+    const nextSavedEditedText = result.savedEditedText ?? null;
+    const nextSavedSkipped = result.savedIsSkipped ?? nextSkipped;
+
+    setSavedEditedText(nextSavedEditedText);
+    setSkippedValue(nextSavedSkipped);
+    onLocalEditChange(() => ({
+      editedText: nextSavedEditedText,
+      isSkipped: nextSavedSkipped,
+    }));
+    router.refresh();
   }
 
-  async function submitSegmentEdit(event: React.FormEvent<HTMLFormElement>) {
+  async function submitSegmentEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const nativeEvent = event.nativeEvent as SubmitEvent;
@@ -469,8 +534,11 @@ function SegmentEditForm({
 
     setSavedEditedText(nextSavedEditedText);
     setTextValue(nextSavedText);
-    setSavedSkipped(nextSavedSkipped);
     setSkippedValue(nextSavedSkipped);
+    onLocalEditChange(() => ({
+      editedText: nextSavedEditedText,
+      isSkipped: nextSavedSkipped,
+    }));
     onUnsavedChange(segment.id, false);
   }
 
@@ -486,9 +554,9 @@ function SegmentEditForm({
           : isHighlighted
             ? "border-amber-300 bg-amber-50"
           : skippedValue
-          ? "border-zinc-200 bg-zinc-50 opacity-55"
+          ? "border-zinc-200 bg-zinc-50"
           : "border-zinc-200 bg-white"
-      } ${isActive && skippedValue ? "opacity-60" : ""}`}
+      } ${skippedValue ? "opacity-60" : ""}`}
     >
       <input type="hidden" name="jobId" value={jobId} />
       <input type="hidden" name="segmentId" value={segment.id} />
@@ -546,7 +614,8 @@ function SegmentEditForm({
             type="checkbox"
             name="isSkipped"
             checked={skippedValue}
-            onChange={(event) => updateSkippedValue(event.target.checked)}
+            disabled={skipPending}
+            onChange={(event) => void updateSkippedValue(event.target.checked)}
             className="peer sr-only"
           />
           <span className="relative h-5 w-9 rounded-full bg-zinc-300 transition peer-checked:bg-zinc-950 after:absolute after:left-0.5 after:top-0.5 after:size-4 after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-4" />
@@ -578,7 +647,17 @@ function SegmentEditForm({
       ) : null}
       {actionState.success ? (
         <p className="mt-3 text-sm text-emerald-700" aria-live="polite">
-          segment編集を保存しました。
+          本文編集を保存しました。
+        </p>
+      ) : null}
+      {skipPending ? (
+        <p className="mt-3 text-xs text-zinc-500" aria-live="polite">
+          skip状態を保存中...
+        </p>
+      ) : null}
+      {skipActionState.error ? (
+        <p className="mt-3 text-sm text-red-700" aria-live="polite">
+          {skipActionState.error}
         </p>
       ) : null}
 
@@ -590,7 +669,7 @@ function SegmentEditForm({
           disabled={pending}
           className="inline-flex min-h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
         >
-          {pending ? "保存中..." : "変更を保存"}
+          {pending ? "保存中..." : "本文の変更を保存"}
         </button>
         <button
           type="submit"
@@ -599,7 +678,7 @@ function SegmentEditForm({
           disabled={pending || !hasSavedEdit}
           className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:border-zinc-200 disabled:text-zinc-400"
         >
-          元に戻す
+          本文を元に戻す
         </button>
       </div>
     </form>
