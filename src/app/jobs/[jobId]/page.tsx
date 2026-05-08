@@ -5,11 +5,10 @@ import {
   QualityNotesForm,
   type QualityNotesFormValues,
 } from "@/components/quality-notes-form";
-import { SpeakerAnalysisPanel } from "@/components/speaker-analysis-panel";
 import {
-  SpeakerNamesForm,
+  SpeakerAnalysisPanel,
   type SpeakerNameFormRow,
-} from "@/components/speaker-names-form";
+} from "@/components/speaker-analysis-panel";
 import { TranscriptMarkdown } from "@/components/transcript-markdown";
 import { analyzeSpeakers } from "@/lib/speaker-analysis";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
@@ -164,6 +163,8 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
     path: job.storage_path,
     storage: adminSupabase.storage,
   });
+  const shouldExpandSystemDetails =
+    job.status === "processing" || job.status === "failed";
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-3xl px-6 py-12">
@@ -184,52 +185,82 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
           </span>
         </div>
 
-        <dl className="mt-8 grid gap-4 text-sm sm:grid-cols-2">
-          <div>
-            <dt className="text-zinc-500">Progress</dt>
-            <dd className="mt-1 font-medium text-zinc-950">{job.progress}%</dd>
-            <JobAutoRefresh status={job.status} />
-          </div>
-          <div>
-            <dt className="text-zinc-500">Storage path</dt>
-            <dd className="mt-1 break-all font-mono text-xs text-zinc-700">
-              {job.storage_path}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-zinc-500">Skipped empty segments</dt>
-            <dd className="mt-1 font-medium text-zinc-950">
-              {job.skipped_segments_count || 0}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-zinc-500">Created</dt>
-            <dd className="mt-1 font-medium text-zinc-950">
-              {new Date(job.created_at).toLocaleString()}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-zinc-500">Updated</dt>
-            <dd className="mt-1 font-medium text-zinc-950">
-              {new Date(job.updated_at).toLocaleString()}
-            </dd>
-          </div>
-        </dl>
+        <details
+          className="mt-6 rounded-md border border-zinc-200 bg-zinc-50 p-4"
+          open={shouldExpandSystemDetails}
+        >
+          <summary className="cursor-pointer list-none text-sm text-zinc-700 marker:hidden">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="font-semibold text-zinc-950">詳細を見る</span>
+                <span>Status: {job.status}</span>
+                <span>Progress: {job.progress}%</span>
+                {job.error_message ? (
+                  <span className="font-medium text-red-700">Errorあり</span>
+                ) : null}
+              </div>
+              <span className="text-xs text-zinc-500">
+                品質メモとシステム情報
+              </span>
+            </div>
+          </summary>
 
-        {job.error_message ? (
-          <p className="mt-6 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {job.error_message}
-          </p>
-        ) : null}
+          <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-zinc-500">Status</dt>
+              <dd className="mt-1 font-medium text-zinc-950">{job.status}</dd>
+            </div>
+            <div>
+              <dt className="text-zinc-500">Progress</dt>
+              <dd className="mt-1 font-medium text-zinc-950">{job.progress}%</dd>
+              <JobAutoRefresh status={job.status} />
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-zinc-500">Error message</dt>
+              <dd className="mt-1 text-zinc-950">
+                {job.error_message || "なし"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-zinc-500">Storage path</dt>
+              <dd className="mt-1 break-all font-mono text-xs text-zinc-700">
+                {job.storage_path}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-zinc-500">Skipped empty segments</dt>
+              <dd className="mt-1 font-medium text-zinc-950">
+                {job.skipped_segments_count || 0}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-zinc-500">Created</dt>
+              <dd className="mt-1 font-medium text-zinc-950">
+                {new Date(job.created_at).toLocaleString()}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-zinc-500">Updated</dt>
+              <dd className="mt-1 font-medium text-zinc-950">
+                {new Date(job.updated_at).toLocaleString()}
+              </dd>
+            </div>
+          </dl>
 
-        <QualityNotesForm
+          {job.error_message ? (
+            <p className="mt-6 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {job.error_message}
+            </p>
+          ) : null}
+
+          <QualityNotesForm jobId={job.id} initialValues={qualityNoteValues} />
+        </details>
+
+        <SpeakerAnalysisPanel
+          analysis={speakerAnalysis}
           jobId={job.id}
-          initialValues={qualityNoteValues}
+          speakers={speakerFormRows}
         />
-
-        <SpeakerAnalysisPanel analysis={speakerAnalysis} jobId={job.id} />
-
-        <SpeakerNamesForm jobId={job.id} speakers={speakerFormRows} />
 
         <TranscriptMarkdown
           audioUrl={audioSignedUrl}
