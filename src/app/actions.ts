@@ -35,6 +35,8 @@ export type ExpectedSpeakerCountActionState = {
 
 export type SegmentEditActionState = {
   error: string | null;
+  savedEditedText?: string | null;
+  savedIsSkipped?: boolean;
   success: boolean;
 };
 
@@ -420,8 +422,29 @@ export async function saveSegmentEdit(
       };
     }
 
+    const { data: savedEdit, error: savedEditError } = await supabase
+      .from("transcription_segment_edits")
+      .select("edited_text, is_skipped")
+      .eq("segment_id", segment.id)
+      .maybeSingle();
+
+    if (savedEditError || !savedEdit) {
+      return {
+        error: `segment編集の再読み込みに失敗しました: ${savedEditError?.message || "not found"}`,
+        success: false,
+      };
+    }
+
     revalidatePath(`/jobs/${jobId}`);
-    return { error: null, success: true };
+    return {
+      error: null,
+      savedEditedText:
+        typeof savedEdit.edited_text === "string" && savedEdit.edited_text.trim()
+          ? savedEdit.edited_text
+          : null,
+      savedIsSkipped: Boolean(savedEdit.is_skipped),
+      success: true,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
     return { error: message, success: false };
