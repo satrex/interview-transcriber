@@ -9,6 +9,13 @@ export type TranscriptSegment = {
 
 export type SpeakerNameMap = Record<string, string>;
 
+export type SegmentEdit = {
+  editedText: string | null;
+  isSkipped: boolean;
+};
+
+export type SegmentEditMap = Record<string, SegmentEdit>;
+
 export type TranscriptBlock = {
   speakerLabel: string;
   speakerName: string;

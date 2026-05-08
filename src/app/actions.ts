@@ -33,6 +33,11 @@ export type ExpectedSpeakerCountActionState = {
   success: boolean;
 };
 
+export type SegmentEditActionState = {
+  error: string | null;
+  success: boolean;
+};
+
 export async function loginWithPassword(
   _previousState: LoginActionState,
   formData: FormData,
@@ -350,7 +355,85 @@ export async function saveExpectedSpeakerCount(
   }
 }
 
+export async function saveSegmentEdit(
+  _previousState: SegmentEditActionState,
+  formData: FormData,
+): Promise<SegmentEditActionState> {
+  const jobId = getTextValue(formData, "jobId");
+  const segmentId = getTextValue(formData, "segmentId");
+  const editedText = getRawTextValue(formData, "editedText");
+  const isSkipped = formData.get("isSkipped") === "on";
+  const intent = getTextValue(formData, "intent");
+
+  if (!jobId || !segmentId) {
+    return { error: "ジョブまたはsegmentが指定されていません。", success: false };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。", success: false };
+    }
+
+    const { data: segment, error: segmentError } = await supabase
+      .from("transcription_segments")
+      .select("id, job_id")
+      .eq("id", segmentId)
+      .eq("job_id", jobId)
+      .single();
+
+    if (segmentError || !segment) {
+      return { error: "segmentが見つかりません。", success: false };
+    }
+
+    const editValues =
+      intent === "reset"
+        ? {
+            edited_text: null,
+          }
+        : {
+            edited_text: editedText.trim() ? editedText : null,
+            is_skipped: isSkipped,
+          };
+
+    const { error: upsertError } = await supabase
+      .from("transcription_segment_edits")
+      .upsert(
+        {
+          ...editValues,
+          job_id: jobId,
+          segment_id: segment.id,
+          user_id: user.id,
+        },
+        { onConflict: "segment_id" },
+      );
+
+    if (upsertError) {
+      return {
+        error: `segment編集の保存に失敗しました: ${upsertError.message}`,
+        success: false,
+      };
+    }
+
+    revalidatePath(`/jobs/${jobId}`);
+    return { error: null, success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
 function getTextValue(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
+}
+
+function getRawTextValue(formData: FormData, key: string) {
+  const value = formData.get(key);
+  return typeof value === "string" ? value : "";
 }

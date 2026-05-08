@@ -5,7 +5,6 @@ import {
   QualityNotesForm,
   type QualityNotesFormValues,
 } from "@/components/quality-notes-form";
-import { SegmentAudioPlayer } from "@/components/segment-audio-player";
 import { SpeakerAnalysisPanel } from "@/components/speaker-analysis-panel";
 import {
   SpeakerNamesForm,
@@ -16,7 +15,11 @@ import { analyzeSpeakers } from "@/lib/speaker-analysis";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createAudioSignedUrl } from "@/lib/storage";
-import type { SpeakerNameMap, TranscriptSegment } from "@/lib/transcript";
+import type {
+  SegmentEditMap,
+  SpeakerNameMap,
+  TranscriptSegment,
+} from "@/lib/transcript";
 
 type JobDetailPageProps = {
   params: Promise<{
@@ -79,6 +82,27 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
       text: String(segment.text),
       chunkIndex: Number(segment.chunk_index),
     })) || [];
+
+  const { data: segmentEditRows, error: segmentEditsError } = await supabase
+    .from("transcription_segment_edits")
+    .select("segment_id, edited_text, is_skipped")
+    .eq("job_id", job.id);
+
+  if (segmentEditsError) {
+    throw new Error(`Failed to load segment edits: ${segmentEditsError.message}`);
+  }
+
+  const segmentEdits: SegmentEditMap = {};
+
+  for (const row of segmentEditRows || []) {
+    segmentEdits[String(row.segment_id)] = {
+      editedText:
+        typeof row.edited_text === "string" && row.edited_text.trim()
+          ? row.edited_text
+          : null,
+      isSkipped: Boolean(row.is_skipped),
+    };
+  }
 
   const { data: qualityNote, error: qualityNoteError } = await supabase
     .from("transcription_job_quality_notes")
@@ -207,14 +231,11 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
 
         <SpeakerNamesForm jobId={job.id} speakers={speakerFormRows} />
 
-        <SegmentAudioPlayer
-          audioUrl={audioSignedUrl}
-          segments={segments}
-          speakerNames={speakerNames}
-        />
-
         <TranscriptMarkdown
+          audioUrl={audioSignedUrl}
           exportBaseName={job.original_filename}
+          jobId={job.id}
+          segmentEdits={segmentEdits}
           segments={segments}
           speakerNames={speakerNames}
         />
