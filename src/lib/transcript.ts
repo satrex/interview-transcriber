@@ -5,6 +5,7 @@ export type TranscriptSegment = {
   endSec: number;
   text: string;
   chunkIndex: number;
+  segmentIndex?: number;
 };
 
 export type SpeakerNameMap = Record<string, string>;

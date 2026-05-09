@@ -9,6 +9,7 @@ export type TranscriptionJob = {
   storage_path: string;
   status: "queued" | "processing" | "completed" | "failed";
   progress: number;
+  audio_duration_sec: number | null;
   skipped_segments_count: number;
   attempt_count: number;
   worker_id: string | null;

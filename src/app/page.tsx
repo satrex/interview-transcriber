@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { logout } from "@/app/actions";
 import { LoginForm } from "@/components/login-form";
 import { UploadForm } from "@/components/upload-form";
@@ -45,6 +46,15 @@ export default async function Home() {
 
               <div className="mt-8">
                 <UploadForm />
+              </div>
+
+              <div className="mt-8 border-t border-zinc-200 pt-6">
+                <Link
+                  href="/jobs"
+                  className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+                >
+                  プロジェクト一覧を開く
+                </Link>
               </div>
             </>
           ) : (

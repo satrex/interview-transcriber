@@ -5,6 +5,7 @@ import { splitAudioIntoChunks } from "./ffmpeg.js";
 import { probeAudio } from "./ffprobe.js";
 import {
   assertJobClaimActive,
+  updateJobAudioDuration,
   markJobCompleted,
   touchJobLock,
   updateJobProgress,
@@ -46,6 +47,7 @@ export async function processJob(
 
     console.log("[worker] ffprobe audio info:");
     console.log(JSON.stringify(audioInfo, null, 2));
+    await updateJobAudioDuration(supabase, job, audioInfo.durationSec);
 
     console.log(
       `[worker] splitting audio into ${config.audioChunkSeconds}s chunks`,

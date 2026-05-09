@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   saveSegmentEdit,
@@ -57,23 +57,39 @@ export function TranscriptMarkdown({
   const [effectiveSegmentEditMap, setEffectiveSegmentEditMap] =
     useState<SegmentEditMap>(segmentEdits);
 
-  const effectiveSegments = buildEffectiveSegments(
-    segments,
-    effectiveSegmentEditMap,
+  const effectiveSegments = useMemo(
+    () => buildEffectiveSegments(segments, effectiveSegmentEditMap),
+    [effectiveSegmentEditMap, segments],
   );
-  const blocks = buildTranscriptBlocks(effectiveSegments, speakerNames);
-  const previewBlocks = buildPreviewBlocks(effectiveSegments, speakerNames);
-  const markdown = buildTranscriptMarkdown(blocks, { showTimestamps });
-  const plainText = buildTranscriptText(blocks, { showTimestamps });
+  const blocks = useMemo(
+    () => buildTranscriptBlocks(effectiveSegments, speakerNames),
+    [effectiveSegments, speakerNames],
+  );
+  const previewBlocks = useMemo(
+    () => buildPreviewBlocks(effectiveSegments, speakerNames),
+    [effectiveSegments, speakerNames],
+  );
+  const markdown = useMemo(
+    () => buildTranscriptMarkdown(blocks, { showTimestamps }),
+    [blocks, showTimestamps],
+  );
+  const plainText = useMemo(
+    () => buildTranscriptText(blocks, { showTimestamps }),
+    [blocks, showTimestamps],
+  );
   const safeExportBaseName = buildSafeFileName(exportBaseName);
-  const unsavedSegmentIds = Object.keys(unsavedSegments).filter(
-    (segmentId) => unsavedSegments[segmentId],
+  const unsavedSegmentIds = useMemo(
+    () =>
+      Object.keys(unsavedSegments).filter(
+        (segmentId) => unsavedSegments[segmentId],
+      ),
+    [unsavedSegments],
   );
   const unsavedSegmentCount = unsavedSegmentIds.length;
-  const speakerLabels = buildSpeakerLabelOptions(
-    segments,
-    speakerNames,
-    effectiveSegmentEditMap,
+  const speakerLabels = useMemo(
+    () =>
+      buildSpeakerLabelOptions(segments, speakerNames, effectiveSegmentEditMap),
+    [effectiveSegmentEditMap, segments, speakerNames],
   );
 
   useEffect(() => {

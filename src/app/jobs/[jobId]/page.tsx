@@ -14,10 +14,12 @@ import { analyzeSpeakers } from "@/lib/speaker-analysis";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createAudioSignedUrl } from "@/lib/storage";
+import {
+  fetchAllSegmentEdits,
+  fetchAllSegments,
+} from "@/lib/transcript-segments";
 import type {
-  SegmentEditMap,
   SpeakerNameMap,
-  TranscriptSegment,
 } from "@/lib/transcript";
 
 type JobDetailPageProps = {
@@ -52,7 +54,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
   const { data: job, error } = await supabase
     .from("transcription_jobs")
     .select(
-      "id, original_filename, status, progress, skipped_segments_count, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at",
+      "id, original_filename, status, progress, audio_duration_sec, skipped_segments_count, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at",
     )
     .eq("id", jobId)
     .single();
@@ -61,72 +63,10 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
     notFound();
   }
 
-  const { data: segmentRows, error: segmentsError } = await supabase
-    .from("transcription_segments")
-    .select("id, speaker_label, start_sec, end_sec, text, chunk_index")
-    .eq("job_id", job.id)
-    .order("chunk_index", { ascending: true })
-    .order("start_sec", { ascending: true });
-
-  if (segmentsError) {
-    throw new Error(`Failed to load transcript segments: ${segmentsError.message}`);
-  }
-
-  const segments: TranscriptSegment[] =
-    segmentRows?.map((segment) => ({
-      id: String(segment.id),
-      speakerLabel: String(segment.speaker_label),
-      startSec: Number(segment.start_sec),
-      endSec: Number(segment.end_sec),
-      text: String(segment.text),
-      chunkIndex: Number(segment.chunk_index),
-    })) || [];
-
-  type SegmentEditRow = {
-    segment_id: unknown;
-    edited_text: unknown;
-    edited_speaker_label?: unknown;
-    is_skipped: unknown;
-  };
-
-  const segmentEditResult = await supabase
-    .from("transcription_segment_edits")
-    .select("segment_id, edited_text, edited_speaker_label, is_skipped")
-    .eq("job_id", job.id);
-  let segmentEditRows: SegmentEditRow[] | null = segmentEditResult.data;
-  let segmentEditsError = segmentEditResult.error;
-
-  if (isMissingEditedSpeakerLabelColumn(segmentEditsError)) {
-    const fallbackResult = await supabase
-      .from("transcription_segment_edits")
-      .select("segment_id, edited_text, is_skipped")
-      .eq("job_id", job.id);
-
-    segmentEditRows = fallbackResult.data;
-    segmentEditsError = fallbackResult.error;
-  }
-
-  if (segmentEditsError) {
-    throw new Error(`Failed to load segment edits: ${segmentEditsError.message}`);
-  }
-
-  const segmentEdits: SegmentEditMap = {};
-
-  for (const row of segmentEditRows || []) {
-    segmentEdits[String(row.segment_id)] = {
-      editedText:
-        typeof row.edited_text === "string" && row.edited_text.trim()
-          ? row.edited_text
-          : null,
-      speakerOverride:
-        "edited_speaker_label" in row &&
-        typeof row.edited_speaker_label === "string" &&
-        row.edited_speaker_label.trim()
-          ? row.edited_speaker_label
-          : null,
-      isSkipped: Boolean(row.is_skipped),
-    };
-  }
+  const [segments, segmentEdits] = await Promise.all([
+    fetchAllSegments(job.id, { supabase }),
+    fetchAllSegmentEdits(job.id, { supabase }),
+  ]);
 
   const { data: qualityNote, error: qualityNoteError } = await supabase
     .from("transcription_job_quality_notes")
@@ -199,8 +139,8 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-3xl px-6 py-12">
-      <Link className="text-sm font-medium text-zinc-600 hover:text-zinc-950" href="/">
-        ← アップロード画面へ戻る
+      <Link className="text-sm font-medium text-zinc-600 hover:text-zinc-950" href="/jobs">
+        ← プロジェクト一覧へ戻る
       </Link>
 
       <section className="mt-8 rounded-md border border-zinc-200 bg-white p-8 shadow-sm">
@@ -259,6 +199,15 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
               </dd>
             </div>
             <div>
+              <dt className="text-zinc-500">Audio duration</dt>
+              <dd className="mt-1 font-medium text-zinc-950">
+                {formatDuration(
+                  toNumber(job.audio_duration_sec) ??
+                    Math.max(0, ...segments.map((segment) => segment.endSec)),
+                )}
+              </dd>
+            </div>
+            <div>
               <dt className="text-zinc-500">Skipped empty segments</dt>
               <dd className="mt-1 font-medium text-zinc-950">
                 {job.skipped_segments_count || 0}
@@ -306,9 +255,30 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
   );
 }
 
-function isMissingEditedSpeakerLabelColumn(error: { message?: string } | null) {
-  return Boolean(
-    error?.message?.includes("edited_speaker_label") &&
-      error.message.includes("does not exist"),
-  );
+function formatDuration(value: number) {
+  const totalSeconds = Math.max(0, Math.round(value));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds
+      .toString()
+      .padStart(2, "0")}`;
+  }
+
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function toNumber(value: number | string | null) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
 }

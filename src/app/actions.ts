@@ -49,6 +49,16 @@ export type SegmentSkipActionState = {
   success: boolean;
 };
 
+export type DeleteJobActionState = {
+  error: string | null;
+  success: boolean;
+};
+
+export type RetryJobActionState = {
+  error: string | null;
+  success: boolean;
+};
+
 export async function loginWithPassword(
   _previousState: LoginActionState,
   formData: FormData,
@@ -154,6 +164,166 @@ export async function createTranscriptionJob(
   }
 
   redirect(`/jobs/${jobId}`);
+}
+
+export async function deleteTranscriptionJob(
+  _previousState: DeleteJobActionState,
+  formData: FormData,
+): Promise<DeleteJobActionState> {
+  const jobId = getTextValue(formData, "jobId");
+
+  if (!jobId) {
+    return { error: "削除するジョブが指定されていません。", success: false };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。", success: false };
+    }
+
+    const { data: job, error: jobError } = await supabase
+      .from("transcription_jobs")
+      .select("id, storage_bucket, storage_path")
+      .eq("id", jobId)
+      .single();
+
+    if (jobError || !job) {
+      return { error: "ジョブが見つからないか、削除権限がありません。", success: false };
+    }
+
+    const adminSupabase = createAdminSupabaseClient();
+
+    const { error: editsDeleteError } = await adminSupabase
+      .from("transcription_segment_edits")
+      .delete()
+      .eq("job_id", job.id)
+      .eq("user_id", user.id);
+
+    if (editsDeleteError) {
+      return {
+        error: `削除失敗: segment edits の削除で止まりました。${editsDeleteError.message}`,
+        success: false,
+      };
+    }
+
+    const { error: segmentsDeleteError } = await adminSupabase
+      .from("transcription_segments")
+      .delete()
+      .eq("job_id", job.id);
+
+    if (segmentsDeleteError) {
+      return {
+        error: `削除失敗: segment edits は削除済みですが、segments の削除で止まりました。${segmentsDeleteError.message}`,
+        success: false,
+      };
+    }
+
+    const { error: jobDeleteError } = await adminSupabase
+      .from("transcription_jobs")
+      .delete()
+      .eq("id", job.id)
+      .eq("user_id", user.id);
+
+    if (jobDeleteError) {
+      return {
+        error: `削除失敗: edits と segments は削除済みですが、job の削除で止まりました。${jobDeleteError.message}`,
+        success: false,
+      };
+    }
+
+    const storageDeleteError = await deleteJobSourceAudio({
+      bucket: String(job.storage_bucket),
+      path: String(job.storage_path),
+    });
+
+    if (storageDeleteError) {
+      return {
+        error: `DB上のjob、segments、editsは削除済みですが、Supabase Storage の元音声ファイル削除に失敗しました。${storageDeleteError.message}`,
+        success: false,
+      };
+    }
+
+    revalidatePath("/");
+    revalidatePath("/jobs");
+    return { error: null, success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
+export async function retryTranscriptionJob(
+  _previousState: RetryJobActionState,
+  formData: FormData,
+): Promise<RetryJobActionState> {
+  const jobId = getTextValue(formData, "jobId");
+
+  if (!jobId) {
+    return { error: "再実行するジョブが指定されていません。", success: false };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。", success: false };
+    }
+
+    const { data: job, error: jobError } = await supabase
+      .from("transcription_jobs")
+      .select("id, status")
+      .eq("id", jobId)
+      .single();
+
+    if (jobError || !job) {
+      return { error: "ジョブが見つからないか、再実行権限がありません。", success: false };
+    }
+
+    if (job.status !== "failed") {
+      return { error: "failed 状態のジョブのみ再実行できます。", success: false };
+    }
+
+    const adminSupabase = createAdminSupabaseClient();
+    const { error: updateError } = await adminSupabase
+      .from("transcription_jobs")
+      .update({
+        attempt_count: 0,
+        completed_at: null,
+        error_message: null,
+        failed_at: null,
+        locked_at: null,
+        progress: 0,
+        started_at: null,
+        status: "queued",
+        worker_id: null,
+      })
+      .eq("id", job.id)
+      .eq("user_id", user.id);
+
+    if (updateError) {
+      return {
+        error: `ジョブの再実行準備に失敗しました: ${updateError.message}`,
+        success: false,
+      };
+    }
+
+    revalidatePath("/jobs");
+    revalidatePath(`/jobs/${job.id}`);
+    return { error: null, success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
 }
 
 export async function saveQualityNotes(
@@ -564,4 +734,13 @@ function getTextValue(formData: FormData, key: string) {
 function getRawTextValue(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value : "";
+}
+
+async function deleteJobSourceAudio(options: { bucket: string; path: string }) {
+  const adminSupabase = createAdminSupabaseClient();
+  const { error } = await adminSupabase.storage
+    .from(options.bucket)
+    .remove([options.path]);
+
+  return error;
 }
