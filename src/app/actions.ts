@@ -36,6 +36,7 @@ export type ExpectedSpeakerCountActionState = {
 export type SegmentEditActionState = {
   error: string | null;
   savedEditedText?: string | null;
+  savedSpeakerOverride?: string | null;
   savedIsSkipped?: boolean;
   success: boolean;
 };
@@ -43,6 +44,7 @@ export type SegmentEditActionState = {
 export type SegmentSkipActionState = {
   error: string | null;
   savedEditedText?: string | null;
+  savedSpeakerOverride?: string | null;
   savedIsSkipped?: boolean;
   success: boolean;
 };
@@ -371,6 +373,7 @@ export async function saveSegmentEdit(
   const jobId = getTextValue(formData, "jobId");
   const segmentId = getTextValue(formData, "segmentId");
   const editedText = getRawTextValue(formData, "editedText");
+  const editedSpeakerLabel = getTextValue(formData, "editedSpeakerLabel");
   const intent = getTextValue(formData, "intent");
 
   if (!jobId || !segmentId) {
@@ -390,7 +393,7 @@ export async function saveSegmentEdit(
 
     const { data: segment, error: segmentError } = await supabase
       .from("transcription_segments")
-      .select("id, job_id")
+      .select("id, job_id, speaker_label")
       .eq("id", segmentId)
       .eq("job_id", jobId)
       .single();
@@ -403,9 +406,14 @@ export async function saveSegmentEdit(
       intent === "reset"
         ? {
             edited_text: null,
+            edited_speaker_label: null,
           }
         : {
             edited_text: editedText.trim() ? editedText : null,
+            edited_speaker_label:
+              editedSpeakerLabel && editedSpeakerLabel !== segment.speaker_label
+                ? editedSpeakerLabel
+                : null,
           };
 
     const { error: upsertError } = await supabase
@@ -429,7 +437,7 @@ export async function saveSegmentEdit(
 
     const { data: savedEdit, error: savedEditError } = await supabase
       .from("transcription_segment_edits")
-      .select("edited_text, is_skipped")
+      .select("edited_text, edited_speaker_label, is_skipped")
       .eq("segment_id", segment.id)
       .maybeSingle();
 
@@ -446,6 +454,11 @@ export async function saveSegmentEdit(
       savedEditedText:
         typeof savedEdit.edited_text === "string" && savedEdit.edited_text.trim()
           ? savedEdit.edited_text
+          : null,
+      savedSpeakerOverride:
+        typeof savedEdit.edited_speaker_label === "string" &&
+        savedEdit.edited_speaker_label.trim()
+          ? savedEdit.edited_speaker_label
           : null,
       savedIsSkipped: Boolean(savedEdit.is_skipped),
       success: true,
@@ -511,7 +524,7 @@ export async function saveSegmentSkip(
 
     const { data: savedEdit, error: savedEditError } = await supabase
       .from("transcription_segment_edits")
-      .select("edited_text, is_skipped")
+      .select("edited_text, edited_speaker_label, is_skipped")
       .eq("segment_id", segment.id)
       .maybeSingle();
 
@@ -528,6 +541,11 @@ export async function saveSegmentSkip(
       savedEditedText:
         typeof savedEdit.edited_text === "string" && savedEdit.edited_text.trim()
           ? savedEdit.edited_text
+          : null,
+      savedSpeakerOverride:
+        typeof savedEdit.edited_speaker_label === "string" &&
+        savedEdit.edited_speaker_label.trim()
+          ? savedEdit.edited_speaker_label
           : null,
       savedIsSkipped: Boolean(savedEdit.is_skipped),
       success: true,

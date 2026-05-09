@@ -39,6 +39,7 @@ export function TranscriptMarkdown({
   const audioRef = useRef<HTMLAudioElement>(null);
   const activeSegmentRef = useRef<TranscriptSegment | null>(null);
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastUnsavedJumpIndexRef = useRef(-1);
   const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
   const [highlightedEditSegmentId, setHighlightedEditSegmentId] = useState<
     string | null
@@ -65,8 +66,15 @@ export function TranscriptMarkdown({
   const markdown = buildTranscriptMarkdown(blocks, { showTimestamps });
   const plainText = buildTranscriptText(blocks, { showTimestamps });
   const safeExportBaseName = buildSafeFileName(exportBaseName);
-  const unsavedSegmentCount =
-    Object.values(unsavedSegments).filter(Boolean).length;
+  const unsavedSegmentIds = Object.keys(unsavedSegments).filter(
+    (segmentId) => unsavedSegments[segmentId],
+  );
+  const unsavedSegmentCount = unsavedSegmentIds.length;
+  const speakerLabels = buildSpeakerLabelOptions(
+    segments,
+    speakerNames,
+    effectiveSegmentEditMap,
+  );
 
   useEffect(() => {
     if (unsavedSegmentCount === 0) {
@@ -229,6 +237,27 @@ export function TranscriptMarkdown({
     }, 3000);
   }
 
+  function jumpToUnsavedSegment(segmentId?: string) {
+    const targetSegmentId = segmentId || unsavedSegmentIds[0];
+
+    if (targetSegmentId) {
+      lastUnsavedJumpIndexRef.current =
+        unsavedSegmentIds.indexOf(targetSegmentId);
+      jumpToSegment(targetSegmentId, "edit");
+    }
+  }
+
+  function jumpToNextUnsavedSegment() {
+    if (unsavedSegmentIds.length === 0) {
+      return;
+    }
+
+    const currentIndex = lastUnsavedJumpIndexRef.current;
+    const nextIndex = (currentIndex + 1) % unsavedSegmentIds.length;
+
+    jumpToUnsavedSegment(unsavedSegmentIds[nextIndex]);
+  }
+
   if (segments.length === 0) {
     return (
       <div className="mt-8 rounded-md bg-zinc-50 p-4 text-sm text-zinc-600">
@@ -294,11 +323,23 @@ export function TranscriptMarkdown({
         </p>
       ) : null}
       {unsavedSegmentCount > 0 ? (
-        <div className="mt-4 rounded-md border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-900">
-          <span className="font-semibold">未保存の変更があります。</span>
-          <span className="ml-2">
-            {unsavedSegmentCount} segmentを保存してください。
-          </span>
+        <div className="sticky top-0 z-20 mt-4 rounded-md border border-orange-300 bg-orange-50 px-4 py-3 text-sm text-orange-950 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <button
+              type="button"
+              onClick={() => jumpToUnsavedSegment()}
+              className="text-left font-semibold underline decoration-orange-300 underline-offset-4 transition hover:decoration-orange-700"
+            >
+              未保存の編集が{unsavedSegmentCount}件あります
+            </button>
+            <button
+              type="button"
+              onClick={jumpToNextUnsavedSegment}
+              className="inline-flex min-h-9 w-fit items-center justify-center rounded-md border border-orange-300 bg-white px-3 text-sm font-semibold text-orange-950 transition hover:bg-orange-100"
+            >
+              次の未保存へ
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -329,9 +370,8 @@ export function TranscriptMarkdown({
               onPlay={() => void playSegment(segment)}
               onUnsavedChange={updateSegmentUnsaved}
               segment={segment}
-              speakerName={
-                speakerNames[segment.speakerLabel] || segment.speakerLabel
-              }
+              speakerLabels={speakerLabels}
+              speakerNames={speakerNames}
             />
           );
         })}
@@ -419,7 +459,8 @@ type SegmentEditFormProps = {
   onPlay: () => void;
   onUnsavedChange: (segmentId: string, isUnsaved: boolean) => void;
   segment: TranscriptSegment;
-  speakerName: string;
+  speakerLabels: string[];
+  speakerNames: SpeakerNameMap;
 };
 
 function SegmentEditForm({
@@ -432,12 +473,17 @@ function SegmentEditForm({
   onPlay,
   onUnsavedChange,
   segment,
-  speakerName,
+  speakerLabels,
+  speakerNames,
 }: SegmentEditFormProps) {
   const router = useRouter();
   const editedText = edit?.editedText ?? null;
+  const speakerOverride = edit?.speakerOverride ?? null;
   const isSkipped = edit?.isSkipped || false;
   const effectiveText = editedText ?? segment.text;
+  const effectiveSpeakerLabel = speakerOverride ?? segment.speakerLabel;
+  const speakerName =
+    speakerNames[effectiveSpeakerLabel] || effectiveSpeakerLabel;
   const [actionState, setActionState] = useState(initialSegmentEditState);
   const [skipActionState, setSkipActionState] =
     useState<SegmentSkipActionState>({
@@ -449,15 +495,32 @@ function SegmentEditForm({
   const [savedEditedText, setSavedEditedText] = useState<string | null>(
     editedText,
   );
+  const [savedSpeakerOverride, setSavedSpeakerOverride] = useState<string | null>(
+    speakerOverride,
+  );
   const [textValue, setTextValue] = useState(effectiveText);
+  const [speakerValue, setSpeakerValue] = useState(effectiveSpeakerLabel);
   const [skippedValue, setSkippedValue] = useState(isSkipped);
-  const hasSavedEdit = savedEditedText !== null;
+  const hasSavedEdit = savedEditedText !== null || savedSpeakerOverride !== null;
   const savedText = savedEditedText ?? segment.text;
-  const hasUnsavedChanges = textValue !== savedText;
+  const savedSpeakerLabel = savedSpeakerOverride ?? segment.speakerLabel;
+  const hasUnsavedChanges =
+    textValue !== savedText || speakerValue !== savedSpeakerLabel;
 
   function updateTextValue(nextText: string) {
     setTextValue(nextText);
-    onUnsavedChange(segment.id, nextText !== savedText);
+    onUnsavedChange(
+      segment.id,
+      nextText !== savedText || speakerValue !== savedSpeakerLabel,
+    );
+  }
+
+  function updateSpeakerValue(nextSpeakerLabel: string) {
+    setSpeakerValue(nextSpeakerLabel);
+    onUnsavedChange(
+      segment.id,
+      textValue !== savedText || nextSpeakerLabel !== savedSpeakerLabel,
+    );
   }
 
   async function updateSkippedValue(nextSkipped: boolean) {
@@ -468,6 +531,7 @@ function SegmentEditForm({
     setSkipActionState({ error: null, success: false });
     onLocalEditChange((current) => ({
       editedText: current ? current.editedText : savedEditedText,
+      speakerOverride: current ? current.speakerOverride : savedSpeakerOverride,
       isSkipped: nextSkipped,
     }));
 
@@ -488,18 +552,22 @@ function SegmentEditForm({
       setSkippedValue(previousSkipped);
       onLocalEditChange((current) => ({
         editedText: current ? current.editedText : savedEditedText,
+        speakerOverride: current ? current.speakerOverride : savedSpeakerOverride,
         isSkipped: previousSkipped,
       }));
       return;
     }
 
     const nextSavedEditedText = result.savedEditedText ?? null;
+    const nextSavedSpeakerOverride = result.savedSpeakerOverride ?? null;
     const nextSavedSkipped = result.savedIsSkipped ?? nextSkipped;
 
     setSavedEditedText(nextSavedEditedText);
+    setSavedSpeakerOverride(nextSavedSpeakerOverride);
     setSkippedValue(nextSavedSkipped);
     onLocalEditChange(() => ({
       editedText: nextSavedEditedText,
+      speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
     }));
     router.refresh();
@@ -529,14 +597,19 @@ function SegmentEditForm({
     router.refresh();
 
     const nextSavedEditedText = result.savedEditedText ?? null;
+    const nextSavedSpeakerOverride = result.savedSpeakerOverride ?? null;
     const nextSavedSkipped = result.savedIsSkipped ?? skippedValue;
     const nextSavedText = nextSavedEditedText ?? segment.text;
+    const nextSavedSpeakerLabel = nextSavedSpeakerOverride ?? segment.speakerLabel;
 
     setSavedEditedText(nextSavedEditedText);
+    setSavedSpeakerOverride(nextSavedSpeakerOverride);
     setTextValue(nextSavedText);
+    setSpeakerValue(nextSavedSpeakerLabel);
     setSkippedValue(nextSavedSkipped);
     onLocalEditChange(() => ({
       editedText: nextSavedEditedText,
+      speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
     }));
     onUnsavedChange(segment.id, false);
@@ -560,6 +633,7 @@ function SegmentEditForm({
     >
       <input type="hidden" name="jobId" value={jobId} />
       <input type="hidden" name="segmentId" value={segment.id} />
+      <input type="hidden" name="editedSpeakerLabel" value={speakerValue} />
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
@@ -605,7 +679,10 @@ function SegmentEditForm({
             ) : null}
           </div>
           <p className="mt-1 break-all font-mono text-xs text-zinc-500">
-            {segment.speakerLabel}
+            original: {segment.speakerLabel}
+            {speakerValue !== segment.speakerLabel
+              ? ` / override: ${speakerValue}`
+              : ""}
           </p>
         </div>
 
@@ -622,6 +699,23 @@ function SegmentEditForm({
           このセグメントをスキップする
         </label>
       </div>
+
+      <label className="mt-4 block text-sm font-medium text-zinc-700">
+        話者
+        <select
+          value={speakerValue}
+          onChange={(event) => updateSpeakerValue(event.target.value)}
+          className="mt-2 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
+        >
+          {speakerLabels.map((speakerLabel) => (
+            <option key={speakerLabel} value={speakerLabel}>
+              {speakerNames[speakerLabel]
+                ? `${speakerNames[speakerLabel]} (${speakerLabel})`
+                : speakerLabel}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <textarea
         name="editedText"
@@ -678,7 +772,7 @@ function SegmentEditForm({
           disabled={pending || !hasSavedEdit}
           className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:border-zinc-200 disabled:text-zinc-400"
         >
-          本文を元に戻す
+          本文・話者を元に戻す
         </button>
       </div>
     </form>
@@ -699,10 +793,37 @@ function buildEffectiveSegments(
     return [
       {
         ...segment,
+        speakerLabel: edit?.speakerOverride ?? segment.speakerLabel,
         text: edit?.editedText ?? segment.text,
       },
     ];
   });
+}
+
+function buildSpeakerLabelOptions(
+  segments: TranscriptSegment[],
+  speakerNames: SpeakerNameMap,
+  segmentEdits: SegmentEditMap,
+) {
+  const speakerLabels = new Set<string>();
+
+  for (const segment of segments) {
+    speakerLabels.add(segment.speakerLabel);
+  }
+
+  for (const speakerLabel of Object.keys(speakerNames)) {
+    speakerLabels.add(speakerLabel);
+  }
+
+  for (const edit of Object.values(segmentEdits)) {
+    if (edit.speakerOverride) {
+      speakerLabels.add(edit.speakerOverride);
+    }
+  }
+
+  return Array.from(speakerLabels).sort((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function buildPreviewBlocks(

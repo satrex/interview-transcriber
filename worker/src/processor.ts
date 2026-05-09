@@ -107,7 +107,7 @@ export async function processJob(
       }
 
       await assertJobClaimActive(supabase, job);
-      await saveSegments(supabase, job.id, segments);
+      await saveSegments(supabase, job.id, job.user_id, segments);
 
       const progress = calculateProgress(chunk.chunkIndex + 1, chunks.length);
       await updateJobProgress(

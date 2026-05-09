@@ -11,6 +11,7 @@ export type SpeakerNameMap = Record<string, string>;
 
 export type SegmentEdit = {
   editedText: string | null;
+  speakerOverride: string | null;
   isSkipped: boolean;
 };
 

@@ -82,10 +82,29 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
       chunkIndex: Number(segment.chunk_index),
     })) || [];
 
-  const { data: segmentEditRows, error: segmentEditsError } = await supabase
+  type SegmentEditRow = {
+    segment_id: unknown;
+    edited_text: unknown;
+    edited_speaker_label?: unknown;
+    is_skipped: unknown;
+  };
+
+  const segmentEditResult = await supabase
     .from("transcription_segment_edits")
-    .select("segment_id, edited_text, is_skipped")
+    .select("segment_id, edited_text, edited_speaker_label, is_skipped")
     .eq("job_id", job.id);
+  let segmentEditRows: SegmentEditRow[] | null = segmentEditResult.data;
+  let segmentEditsError = segmentEditResult.error;
+
+  if (isMissingEditedSpeakerLabelColumn(segmentEditsError)) {
+    const fallbackResult = await supabase
+      .from("transcription_segment_edits")
+      .select("segment_id, edited_text, is_skipped")
+      .eq("job_id", job.id);
+
+    segmentEditRows = fallbackResult.data;
+    segmentEditsError = fallbackResult.error;
+  }
 
   if (segmentEditsError) {
     throw new Error(`Failed to load segment edits: ${segmentEditsError.message}`);
@@ -98,6 +117,12 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
       editedText:
         typeof row.edited_text === "string" && row.edited_text.trim()
           ? row.edited_text
+          : null,
+      speakerOverride:
+        "edited_speaker_label" in row &&
+        typeof row.edited_speaker_label === "string" &&
+        row.edited_speaker_label.trim()
+          ? row.edited_speaker_label
           : null,
       isSkipped: Boolean(row.is_skipped),
     };
@@ -136,6 +161,12 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
 
   const speakerNames: SpeakerNameMap = {};
   const speakerLabels = new Set(segments.map((segment) => segment.speakerLabel));
+
+  for (const edit of Object.values(segmentEdits)) {
+    if (edit.speakerOverride) {
+      speakerLabels.add(edit.speakerOverride);
+    }
+  }
 
   for (const row of speakerNameRows || []) {
     const speakerLabel = String(row.speaker_label);
@@ -272,5 +303,12 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
         />
       </section>
     </main>
+  );
+}
+
+function isMissingEditedSpeakerLabelColumn(error: { message?: string } | null) {
+  return Boolean(
+    error?.message?.includes("edited_speaker_label") &&
+      error.message.includes("does not exist"),
   );
 }
