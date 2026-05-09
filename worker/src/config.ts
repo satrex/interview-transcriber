@@ -12,6 +12,7 @@ export type WorkerConfig = {
   openaiApiKey: string;
   openaiTranscriptionModel: string;
   lockTimeoutMinutes: number;
+  maxLockRefreshFailures: number;
   maxAttempts: number;
 };
 
@@ -36,6 +37,11 @@ export function loadConfig(): WorkerConfig {
       process.env.WORKER_LOCK_TIMEOUT_MINUTES,
       30,
       "WORKER_LOCK_TIMEOUT_MINUTES",
+    ),
+    maxLockRefreshFailures: parsePositiveInteger(
+      process.env.WORKER_MAX_LOCK_REFRESH_FAILURES,
+      3,
+      "WORKER_MAX_LOCK_REFRESH_FAILURES",
     ),
     maxAttempts: parsePositiveInteger(
       process.env.WORKER_MAX_ATTEMPTS,

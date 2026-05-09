@@ -13,6 +13,7 @@ import { clearJobSegments, saveSegments } from "./segments.js";
 import { downloadJobAudio } from "./storage.js";
 import type { TranscriptionJob } from "./supabase.js";
 import { createOpenAIClient, transcribeChunk } from "./transcribe.js";
+import { formatErrorMessage } from "./retry.js";
 
 export class PermanentJobFailure extends Error {
   constructor(message: string) {
@@ -27,7 +28,10 @@ export async function processJob(
   job: TranscriptionJob,
 ) {
   let jobTmpDir: string | null = null;
-  const heartbeat = startHeartbeat(supabase, job, config.lockTimeoutMinutes);
+  const heartbeat = startHeartbeat(supabase, job, {
+    lockTimeoutMinutes: config.lockTimeoutMinutes,
+    maxFailures: config.maxLockRefreshFailures,
+  });
 
   try {
     console.log(`[worker] downloading job ${job.id}: ${job.storage_path}`);
@@ -89,6 +93,11 @@ export async function processJob(
         model: config.openaiTranscriptionModel,
         chunk,
         chunkStartSec,
+      }).catch((error) => {
+        console.error(
+          `[worker] transcription API failed for job ${job.id} chunk ${chunk.chunkIndex}: ${formatErrorMessage(error)}`,
+        );
+        throw error;
       });
       const { segments } = transcribed;
       totalSavedSegmentsCount += segments.length;
@@ -106,6 +115,7 @@ export async function processJob(
         );
       }
 
+      heartbeat.assertHealthy();
       await assertJobClaimActive(supabase, job);
       await saveSegments(supabase, job.id, job.user_id, segments);
 
@@ -133,7 +143,7 @@ export async function processJob(
       `[worker] completed job ${job.id}; saved ${totalSavedSegmentsCount} segment(s), skipped ${totalSkippedSegmentsCount} empty segment(s)`,
     );
   } finally {
-    clearInterval(heartbeat);
+    heartbeat.stop();
 
     if (jobTmpDir) {
       await rm(jobTmpDir, { recursive: true, force: true });
@@ -145,21 +155,56 @@ export async function processJob(
 function startHeartbeat(
   supabase: SupabaseClient,
   job: TranscriptionJob,
-  lockTimeoutMinutes: number,
+  options: {
+    lockTimeoutMinutes: number;
+    maxFailures: number;
+  },
 ) {
   const intervalMs = Math.max(
     30_000,
-    Math.min(60_000, (lockTimeoutMinutes * 60_000) / 2),
+    Math.min(60_000, (options.lockTimeoutMinutes * 60_000) / 2),
   );
+  let consecutiveFailures = 0;
+  let fatalError: Error | null = null;
+  let isRefreshing = false;
 
-  return setInterval(() => {
-    touchJobLock(supabase, job).catch((error) => {
-      console.error(
-        `[worker] failed to refresh lock for job ${job.id}:`,
-        error instanceof Error ? error.message : error,
-      );
-    });
+  const interval = setInterval(() => {
+    if (isRefreshing || fatalError) {
+      return;
+    }
+
+    isRefreshing = true;
+    touchJobLock(supabase, job)
+      .then(() => {
+        consecutiveFailures = 0;
+      })
+      .catch((error) => {
+        consecutiveFailures += 1;
+        console.error(
+          `[worker] Supabase lock refresh failed for job ${job.id} (${consecutiveFailures}/${options.maxFailures} consecutive refresh operation failures): ${formatErrorMessage(error)}`,
+        );
+
+        if (consecutiveFailures >= options.maxFailures) {
+          fatalError = new Error(
+            `Supabase lock refresh failed ${consecutiveFailures} consecutive time(s): ${formatErrorMessage(error)}`,
+          );
+        }
+      })
+      .finally(() => {
+        isRefreshing = false;
+      });
   }, intervalMs);
+
+  return {
+    assertHealthy() {
+      if (fatalError) {
+        throw fatalError;
+      }
+    },
+    stop() {
+      clearInterval(interval);
+    },
+  };
 }
 
 function calculateProgress(completedChunks: number, totalChunks: number) {

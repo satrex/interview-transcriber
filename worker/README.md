@@ -35,6 +35,7 @@ SUPABASE_AUDIO_BUCKET=audio-uploads
 
 WORKER_ID=sakura-vps-1
 WORKER_LOCK_TIMEOUT_MINUTES=30
+WORKER_MAX_LOCK_REFRESH_FAILURES=3
 WORKER_MAX_ATTEMPTS=3
 WORKER_TMP_DIR=/tmp/interview-transcriber
 FFMPEG_PATH=ffmpeg
@@ -58,7 +59,7 @@ npm run dev
 
 The worker processes at most one claimable job and exits. If no queued or stale job exists, it logs `no claimable jobs found`.
 
-Job claiming is handled by the Supabase RPC function `claim_next_transcription_job`. It uses row locking so multiple workers do not claim the same job at the same time. A `processing` job whose `locked_at` is older than `WORKER_LOCK_TIMEOUT_MINUTES` can be claimed again until `WORKER_MAX_ATTEMPTS` is reached. While a worker is active, it refreshes `locked_at` periodically so a long-running job is not treated as stale.
+Job claiming is handled by the Supabase RPC function `claim_next_transcription_job`. It uses row locking so multiple workers do not claim the same job at the same time. A `processing` job whose `locked_at` is older than `WORKER_LOCK_TIMEOUT_MINUTES` can be claimed again until `WORKER_MAX_ATTEMPTS` is reached. While a worker is active, it refreshes `locked_at` periodically so a long-running job is not treated as stale. Transient Supabase communication failures are retried with exponential backoff; heartbeat refresh failures only stop the job after `WORKER_MAX_LOCK_REFRESH_FAILURES` consecutive failed refresh operations.
 
 Chunk files are written under the job temporary directory with names like:
 

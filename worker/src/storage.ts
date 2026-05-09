@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { retryTransientOperation } from "./retry.js";
 import type { TranscriptionJob } from "./supabase.js";
 
 export async function downloadJobAudio(
@@ -14,9 +15,10 @@ export async function downloadJobAudio(
   const filename = basename(job.storage_path) || "source-audio";
   const localPath = join(jobTmpDir, filename);
 
-  const { data, error } = await supabase.storage
-    .from(job.storage_bucket)
-    .download(job.storage_path);
+  const { data, error } = await retryTransientOperation(
+    { operation: `download source audio for job ${job.id}` },
+    () => supabase.storage.from(job.storage_bucket).download(job.storage_path),
+  );
 
   if (error || !data) {
     throw new Error(
