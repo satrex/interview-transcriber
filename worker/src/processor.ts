@@ -5,13 +5,14 @@ import { splitAudioIntoChunks } from "./ffmpeg.js";
 import { probeAudio } from "./ffprobe.js";
 import {
   assertJobClaimActive,
+  updateJobAudioChunkDuration,
   updateJobAudioDuration,
   markJobCompleted,
   touchJobLock,
   updateJobProgress,
 } from "./jobs.js";
 import { clearJobSegments, saveSegments } from "./segments.js";
-import { downloadJobAudio } from "./storage.js";
+import { downloadJobAudio, uploadJobAudioChunks } from "./storage.js";
 import type { TranscriptionJob } from "./supabase.js";
 import { createOpenAIClient, transcribeChunk } from "./transcribe.js";
 import { formatErrorMessage } from "./retry.js";
@@ -70,6 +71,18 @@ export async function processJob(
     for (const chunk of chunks) {
       console.log(
         `[worker] chunk ${chunk.chunkIndex}: ${chunk.path} (${chunk.bytes} bytes)`,
+      );
+    }
+
+    try {
+      const uploadedChunks = await uploadJobAudioChunks(supabase, job, chunks);
+      await updateJobAudioChunkDuration(supabase, job, config.audioChunkSeconds);
+      console.log(
+        `[worker] uploaded ${uploadedChunks.length} browser audio chunk(s) for job ${job.id}`,
+      );
+    } catch (error) {
+      console.warn(
+        `[worker] failed to upload browser audio chunks for job ${job.id}; continuing with transcription. Segment playback will fall back to source audio. ${formatErrorMessage(error)}`,
       );
     }
 

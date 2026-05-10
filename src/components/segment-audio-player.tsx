@@ -45,8 +45,7 @@ export function SegmentAudioPlayer({
 
       <audio
         ref={audioRef}
-        src={audioUrl ?? undefined}
-        preload="metadata"
+        preload="none"
         onError={handleAudioError}
         onLoadedMetadata={() => setAudioErrorMessage(null)}
         onTimeUpdate={stopAtSegmentEnd}

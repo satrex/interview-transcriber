@@ -7,6 +7,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   buildJobSourceStoragePath,
   getAudioBucketName,
+  getAudioContentType,
   validateAudioFile,
 } from "@/lib/storage";
 
@@ -134,7 +135,7 @@ export async function createTranscriptionJob(
     const { error: uploadError } = await adminSupabase.storage
       .from(bucketName)
       .upload(storagePath, file, {
-        contentType: file.type || "application/octet-stream",
+        contentType: getAudioContentType(file.name, file.type),
         upsert: false,
       });
 

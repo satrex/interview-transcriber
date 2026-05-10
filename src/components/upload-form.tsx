@@ -260,6 +260,10 @@ async function transcodeAudio(
     "32k",
     "-c:a",
     "aac",
+    "-profile:a",
+    "aac_low",
+    "-movflags",
+    "+faststart",
     outputName,
   ]);
 

@@ -2,6 +2,8 @@ const ALLOWED_AUDIO_EXTENSIONS = new Set(["mp3", "m4a", "wav"]);
 
 const AUDIO_SIGNED_URL_EXPIRES_IN_SECONDS = 60 * 60 * 6;
 
+export const DEFAULT_AUDIO_CHUNK_DURATION_SEC = 600;
+
 export function getAudioBucketName() {
   return process.env.SUPABASE_AUDIO_BUCKET || "audio-uploads";
 }
@@ -31,6 +33,30 @@ export function validateAudioFile(file: File) {
 
 export function buildJobSourceStoragePath(jobId: string, originalFilename: string) {
   return `jobs/${jobId}/source/${toSafeStorageFilename(originalFilename)}`;
+}
+
+export function buildJobAudioChunkStoragePath(
+  jobId: string,
+  chunkIndex: number,
+) {
+  return `jobs/${jobId}/chunks/chunk_${chunkIndex
+    .toString()
+    .padStart(3, "0")}.wav`;
+}
+
+export function getAudioContentType(filename: string, fallback?: string) {
+  const extension = getFileExtension(filename);
+
+  switch (extension) {
+    case "m4a":
+      return "audio/mp4";
+    case "mp3":
+      return "audio/mpeg";
+    case "wav":
+      return "audio/wav";
+    default:
+      return fallback || "application/octet-stream";
+  }
 }
 
 export async function createAudioSignedUrl(options: {

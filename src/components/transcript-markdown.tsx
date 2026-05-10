@@ -21,6 +21,7 @@ import {
 import { useSegmentAudioPlayback } from "./use-segment-audio-playback";
 
 type TranscriptMarkdownProps = {
+  audioChunkDurationSec?: number | null;
   audioLoadError?: string | null;
   audioUrl: string | null;
   exportBaseName?: string;
@@ -31,6 +32,7 @@ type TranscriptMarkdownProps = {
 };
 
 export function TranscriptMarkdown({
+  audioChunkDurationSec = null,
   audioLoadError = null,
   audioUrl,
   exportBaseName = "transcript",
@@ -51,7 +53,11 @@ export function TranscriptMarkdown({
     playbackState,
     setAudioErrorMessage,
     stopAtSegmentEnd,
-  } = useSegmentAudioPlayback(audioUrl, { initialAudioError: audioLoadError, jobId });
+  } = useSegmentAudioPlayback(audioUrl, {
+    chunkDurationSec: audioChunkDurationSec,
+    initialAudioError: audioLoadError,
+    jobId,
+  });
   const [highlightedEditSegmentId, setHighlightedEditSegmentId] = useState<
     string | null
   >(null);
@@ -328,8 +334,7 @@ export function TranscriptMarkdown({
 
       <audio
         ref={audioRef}
-        src={audioUrl ?? undefined}
-        preload="metadata"
+        preload="none"
         onError={handleAudioError}
         onLoadedMetadata={() => setAudioErrorMessage(null)}
         onTimeUpdate={stopAtSegmentEnd}

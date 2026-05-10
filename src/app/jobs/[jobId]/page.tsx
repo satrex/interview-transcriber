@@ -28,6 +28,28 @@ type JobDetailPageProps = {
   }>;
 };
 
+type JobDetailRow = {
+  audio_chunk_duration_sec?: number | string | null;
+  audio_duration_sec: number | string | null;
+  created_at: string;
+  error_message: string | null;
+  expected_speaker_count: number | string | null;
+  id: string;
+  original_filename: string;
+  progress: number;
+  skipped_segments_count: number | null;
+  status: "queued" | "processing" | "completed" | "failed";
+  storage_bucket: string;
+  storage_path: string;
+  updated_at: string;
+};
+
+const JOB_DETAIL_SELECT_WITH_CHUNKS =
+  "id, original_filename, status, progress, audio_duration_sec, audio_chunk_duration_sec, skipped_segments_count, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at";
+
+const JOB_DETAIL_SELECT_BASE =
+  "id, original_filename, status, progress, audio_duration_sec, skipped_segments_count, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at";
+
 export default async function JobDetailPage({ params }: JobDetailPageProps) {
   const { jobId } = await params;
   const supabase = await createServerSupabaseClient();
@@ -51,16 +73,40 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
     );
   }
 
-  const { data: job, error } = await supabase
-    .from("transcription_jobs")
-    .select(
-      "id, original_filename, status, progress, audio_duration_sec, skipped_segments_count, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at",
-    )
-    .eq("id", jobId)
-    .single();
+  console.debug("[job detail] loading job", {
+    jobId,
+    supabaseProject: getSupabaseProjectRef(),
+    userId: user.id,
+  });
 
-  if (error || !job) {
-    notFound();
+  const job = await loadJobForCurrentUser({ jobId, supabase, userId: user.id });
+
+  if (!job) {
+    const visibility = await checkJobVisibilityForDiagnostics(jobId);
+
+    if (!visibility.exists) {
+      console.debug("[job detail] job not found", {
+        jobId,
+        supabaseProject: getSupabaseProjectRef(),
+        userId: user.id,
+      });
+      notFound();
+    }
+
+    console.warn("[job detail] job exists but current user cannot read it", {
+      jobId,
+      jobOwnerId: visibility.userId,
+      jobStatus: visibility.status,
+      supabaseProject: getSupabaseProjectRef(),
+      userId: user.id,
+    });
+
+    return (
+      <JobAccessIssue
+        jobId={jobId}
+        message="このジョブはDBに存在しますが、現在ログイン中のユーザーからは表示できません。RLS、ログインユーザー、または参照しているSupabase環境を確認してください。"
+      />
+    );
   }
 
   const [segments, segmentEdits] = await Promise.all([
@@ -128,6 +174,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
     segments,
     Number(job.expected_speaker_count || 2),
   );
+  const audioChunkDurationSec = toNumber(job.audio_chunk_duration_sec ?? null);
   const adminSupabase = createAdminSupabaseClient();
   let audioSignedUrl: string | null = null;
   let audioLoadError: string | null = null;
@@ -259,8 +306,9 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
         />
 
         <TranscriptMarkdown
+          audioChunkDurationSec={audioChunkDurationSec}
           audioUrl={audioSignedUrl}
-          audioLoadError={audioLoadError}
+          audioLoadError={audioChunkDurationSec ? null : audioLoadError}
           exportBaseName={job.original_filename}
           jobId={job.id}
           segmentEdits={segmentEdits}
@@ -270,6 +318,153 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
       </section>
     </main>
   );
+}
+
+async function loadJobForCurrentUser({
+  jobId,
+  supabase,
+  userId,
+}: {
+  jobId: string;
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>;
+  userId: string;
+}) {
+  const result = await supabase
+    .from("transcription_jobs")
+    .select(JOB_DETAIL_SELECT_WITH_CHUNKS)
+    .eq("id", jobId)
+    .maybeSingle();
+
+  if (!result.error) {
+    return result.data as JobDetailRow | null;
+  }
+
+  if (isMissingColumnError(result.error, "audio_chunk_duration_sec")) {
+    console.warn(
+      "[job detail] audio_chunk_duration_sec column is missing; falling back to source audio mode. Apply supabase/migrations/0012_audio_chunk_duration.sql to enable chunk playback metadata.",
+      {
+        error: result.error.message,
+        jobId,
+        supabaseProject: getSupabaseProjectRef(),
+        userId,
+      },
+    );
+
+    const fallbackResult = await supabase
+      .from("transcription_jobs")
+      .select(JOB_DETAIL_SELECT_BASE)
+      .eq("id", jobId)
+      .maybeSingle();
+
+    if (!fallbackResult.error) {
+      const fallbackJob = fallbackResult.data as JobDetailRow | null;
+      return fallbackJob
+        ? { ...fallbackJob, audio_chunk_duration_sec: null }
+        : null;
+    }
+
+    console.error("[job detail] fallback job query failed", {
+      error: fallbackResult.error,
+      jobId,
+      supabaseProject: getSupabaseProjectRef(),
+      userId,
+    });
+    throw new Error(`Failed to load job detail: ${fallbackResult.error.message}`);
+  }
+
+  console.error("[job detail] job query failed", {
+    error: result.error,
+    jobId,
+    supabaseProject: getSupabaseProjectRef(),
+    userId,
+  });
+  throw new Error(`Failed to load job detail: ${result.error.message}`);
+}
+
+async function checkJobVisibilityForDiagnostics(jobId: string) {
+  try {
+    const adminSupabase = createAdminSupabaseClient();
+    const { data, error } = await adminSupabase
+      .from("transcription_jobs")
+      .select("id, user_id, status")
+      .eq("id", jobId)
+      .maybeSingle();
+
+    if (error) {
+      console.error("[job detail] admin visibility check failed", {
+        error,
+        jobId,
+        supabaseProject: getSupabaseProjectRef(),
+      });
+      throw new Error(`Failed to check job visibility: ${error.message}`);
+    }
+
+    if (!data) {
+      return { exists: false as const };
+    }
+
+    return {
+      exists: true as const,
+      status: String(data.status),
+      userId: String(data.user_id),
+    };
+  } catch (error) {
+    console.error("[job detail] visibility diagnostic failed", {
+      error,
+      jobId,
+      supabaseProject: getSupabaseProjectRef(),
+    });
+    throw error;
+  }
+}
+
+function JobAccessIssue({
+  jobId,
+  message,
+}: {
+  jobId: string;
+  message: string;
+}) {
+  return (
+    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center px-6 py-12">
+      <section className="rounded-md border border-amber-200 bg-amber-50 p-8">
+        <h1 className="text-2xl font-semibold text-amber-950">
+          ジョブを表示できません
+        </h1>
+        <p className="mt-3 text-sm leading-6 text-amber-900">{message}</p>
+        <p className="mt-4 break-all font-mono text-xs text-amber-800">
+          jobId: {jobId}
+        </p>
+        <Link
+          className="mt-6 inline-block text-sm font-semibold text-amber-950"
+          href="/jobs"
+        >
+          プロジェクト一覧へ戻る
+        </Link>
+      </section>
+    </main>
+  );
+}
+
+function isMissingColumnError(error: { code?: string; message?: string }, column: string) {
+  return Boolean(
+    error.code === "42703" ||
+      (error.message?.includes(column) && error.message.includes("does not exist")),
+  );
+}
+
+function getSupabaseProjectRef() {
+  try {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+    if (!url) {
+      return null;
+    }
+
+    return new URL(url).hostname.split(".")[0] || null;
+  } catch {
+    return null;
+  }
 }
 
 function formatDuration(value: number) {

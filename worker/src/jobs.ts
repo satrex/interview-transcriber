@@ -174,6 +174,39 @@ export async function updateJobAudioDuration(
   }
 }
 
+export async function updateJobAudioChunkDuration(
+  supabase: SupabaseClient,
+  job: TranscriptionJob,
+  chunkDurationSec: number,
+) {
+  const { data, error } = await retryTransientOperation(
+    { operation: `update audio chunk duration for job ${job.id}` },
+    () =>
+      supabase
+        .from("transcription_jobs")
+        .update({
+          audio_chunk_duration_sec: chunkDurationSec,
+          locked_at: new Date().toISOString(),
+        })
+        .eq("id", job.id)
+        .eq("status", "processing")
+        .eq("worker_id", job.worker_id)
+        .eq("attempt_count", job.attempt_count)
+        .select("id")
+        .maybeSingle(),
+  );
+
+  if (error) {
+    throw new Error(`Failed to update job audio chunk duration: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error(
+      `Lost ownership of job ${job.id} attempt ${job.attempt_count} while updating audio chunk duration.`,
+    );
+  }
+}
+
 export async function touchJobLock(supabase: SupabaseClient, job: TranscriptionJob) {
   const { data, error } = await retryTransientOperation(
     { operation: `refresh lock for job ${job.id}` },
