@@ -1,14 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
 import {
   formatTimestamp,
   type SpeakerNameMap,
   type TranscriptSegment,
 } from "@/lib/transcript";
+import { useSegmentAudioPlayback } from "./use-segment-audio-playback";
 
 type SegmentAudioPlayerProps = {
-  audioUrl: string;
+  audioUrl: string | null;
   segments: TranscriptSegment[];
   speakerNames?: SpeakerNameMap;
 };
@@ -18,53 +18,17 @@ export function SegmentAudioPlayer({
   segments,
   speakerNames = {},
 }: SegmentAudioPlayerProps) {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const activeSegmentRef = useRef<TranscriptSegment | null>(null);
-  const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
-
-  async function playSegment(segment: TranscriptSegment) {
-    const audio = audioRef.current;
-
-    if (!audio) {
-      return;
-    }
-
-    if (activeSegmentId === segment.id && !audio.paused) {
-      audio.pause();
-      clearActiveSegment();
-      return;
-    }
-
-    activeSegmentRef.current = segment;
-    setActiveSegmentId(segment.id);
-    audio.currentTime = Math.max(0, segment.startSec);
-
-    try {
-      await audio.play();
-    } catch {
-      clearActiveSegment();
-    }
-  }
-
-  function stopAtSegmentEnd() {
-    const audio = audioRef.current;
-    const activeSegment = activeSegmentRef.current;
-
-    if (!audio || !activeSegment) {
-      return;
-    }
-
-    if (audio.currentTime >= activeSegment.endSec) {
-      audio.pause();
-      audio.currentTime = activeSegment.endSec;
-      clearActiveSegment();
-    }
-  }
-
-  function clearActiveSegment() {
-    activeSegmentRef.current = null;
-    setActiveSegmentId(null);
-  }
+  const {
+    audioErrorMessage,
+    audioRef,
+    clearActiveSegment,
+    handleAudioError,
+    handleAudioPause,
+    playSegment,
+    playbackState,
+    setAudioErrorMessage,
+    stopAtSegmentEnd,
+  } = useSegmentAudioPlayback(audioUrl);
 
   if (segments.length === 0) {
     return null;
@@ -81,16 +45,29 @@ export function SegmentAudioPlayer({
 
       <audio
         ref={audioRef}
-        src={audioUrl}
+        src={audioUrl ?? undefined}
         preload="metadata"
+        onError={handleAudioError}
+        onLoadedMetadata={() => setAudioErrorMessage(null)}
         onTimeUpdate={stopAtSegmentEnd}
         onEnded={clearActiveSegment}
-        onPause={clearActiveSegment}
+        onPause={handleAudioPause}
       />
+
+      {audioErrorMessage ? (
+        <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {audioErrorMessage}
+        </p>
+      ) : null}
 
       <div className="mt-5 space-y-3">
         {segments.map((segment) => {
-          const isActive = activeSegmentId === segment.id;
+          const segmentPlaybackStatus =
+            playbackState?.segmentId === segment.id
+              ? playbackState.status
+              : null;
+          const isActive = segmentPlaybackStatus !== null;
+          const isPreparing = segmentPlaybackStatus === "preparing";
           const speakerName =
             speakerNames[segment.speakerLabel] || segment.speakerLabel;
 
@@ -107,13 +84,14 @@ export function SegmentAudioPlayer({
                 <button
                   type="button"
                   onClick={() => void playSegment(segment)}
+                  disabled={isPreparing}
                   className={`inline-flex min-h-10 shrink-0 items-center justify-center rounded-md px-4 text-sm font-semibold transition ${
                     isActive
                       ? "bg-emerald-700 text-white hover:bg-emerald-800"
                       : "bg-zinc-950 text-white hover:bg-zinc-800"
-                  }`}
+                  } disabled:cursor-not-allowed disabled:bg-zinc-400`}
                 >
-                  {isActive ? "停止" : "再生"}
+                  {isPreparing ? "準備中..." : isActive ? "停止" : "再生"}
                 </button>
 
                 <div className="min-w-0 flex-1 text-sm leading-7 text-zinc-900">

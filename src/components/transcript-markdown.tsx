@@ -18,9 +18,11 @@ import {
   type SpeakerNameMap,
   type TranscriptSegment,
 } from "@/lib/transcript";
+import { useSegmentAudioPlayback } from "./use-segment-audio-playback";
 
 type TranscriptMarkdownProps = {
-  audioUrl: string;
+  audioLoadError?: string | null;
+  audioUrl: string | null;
   exportBaseName?: string;
   jobId: string;
   segmentEdits?: SegmentEditMap;
@@ -29,6 +31,7 @@ type TranscriptMarkdownProps = {
 };
 
 export function TranscriptMarkdown({
+  audioLoadError = null,
   audioUrl,
   exportBaseName = "transcript",
   jobId,
@@ -36,11 +39,19 @@ export function TranscriptMarkdown({
   segments,
   speakerNames = {},
 }: TranscriptMarkdownProps) {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const activeSegmentRef = useRef<TranscriptSegment | null>(null);
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastUnsavedJumpIndexRef = useRef(-1);
-  const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
+  const {
+    audioErrorMessage,
+    audioRef,
+    clearActiveSegment,
+    handleAudioError,
+    handleAudioPause,
+    playSegment,
+    playbackState,
+    setAudioErrorMessage,
+    stopAtSegmentEnd,
+  } = useSegmentAudioPlayback(audioUrl, { initialAudioError: audioLoadError, jobId });
   const [highlightedEditSegmentId, setHighlightedEditSegmentId] = useState<
     string | null
   >(null);
@@ -153,50 +164,6 @@ export function TranscriptMarkdown({
 
   function downloadPlainText() {
     downloadTextFile(`${safeExportBaseName}.txt`, plainText, "text/plain");
-  }
-
-  async function playSegment(segment: TranscriptSegment) {
-    const audio = audioRef.current;
-
-    if (!audio) {
-      return;
-    }
-
-    if (activeSegmentId === segment.id && !audio.paused) {
-      audio.pause();
-      clearActiveSegment();
-      return;
-    }
-
-    activeSegmentRef.current = segment;
-    setActiveSegmentId(segment.id);
-    audio.currentTime = Math.max(0, segment.startSec);
-
-    try {
-      await audio.play();
-    } catch {
-      clearActiveSegment();
-    }
-  }
-
-  function stopAtSegmentEnd() {
-    const audio = audioRef.current;
-    const activeSegment = activeSegmentRef.current;
-
-    if (!audio || !activeSegment) {
-      return;
-    }
-
-    if (audio.currentTime >= activeSegment.endSec) {
-      audio.pause();
-      audio.currentTime = activeSegment.endSec;
-      clearActiveSegment();
-    }
-  }
-
-  function clearActiveSegment() {
-    activeSegmentRef.current = null;
-    setActiveSegmentId(null);
   }
 
   function updateSegmentUnsaved(segmentId: string, isUnsaved: boolean) {
@@ -361,12 +328,20 @@ export function TranscriptMarkdown({
 
       <audio
         ref={audioRef}
-        src={audioUrl}
+        src={audioUrl ?? undefined}
         preload="metadata"
+        onError={handleAudioError}
+        onLoadedMetadata={() => setAudioErrorMessage(null)}
         onTimeUpdate={stopAtSegmentEnd}
         onEnded={clearActiveSegment}
-        onPause={clearActiveSegment}
+        onPause={handleAudioPause}
       />
+
+      {audioErrorMessage ? (
+        <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {audioErrorMessage}
+        </p>
+      ) : null}
 
       <div className="mt-6 space-y-3">
         {segments.map((segment) => {
@@ -376,7 +351,11 @@ export function TranscriptMarkdown({
             <SegmentEditForm
               key={segment.id}
               edit={edit}
-              isActive={activeSegmentId === segment.id}
+              playbackStatus={
+                playbackState?.segmentId === segment.id
+                  ? playbackState.status
+                  : null
+              }
               isHighlighted={highlightedEditSegmentId === segment.id}
               jobId={jobId}
               onJumpToPreview={() => jumpToSegment(segment.id, "preview")}
@@ -465,7 +444,6 @@ const initialSegmentEditState: SegmentEditActionState = {
 
 type SegmentEditFormProps = {
   edit?: SegmentEdit;
-  isActive: boolean;
   isHighlighted: boolean;
   jobId: string;
   onJumpToPreview: () => void;
@@ -474,6 +452,7 @@ type SegmentEditFormProps = {
   ) => void;
   onPlay: () => void;
   onUnsavedChange: (segmentId: string, isUnsaved: boolean) => void;
+  playbackStatus: "preparing" | "playing" | null;
   segment: TranscriptSegment;
   speakerLabels: string[];
   speakerNames: SpeakerNameMap;
@@ -481,13 +460,13 @@ type SegmentEditFormProps = {
 
 function SegmentEditForm({
   edit,
-  isActive,
   isHighlighted,
   jobId,
   onJumpToPreview,
   onLocalEditChange,
   onPlay,
   onUnsavedChange,
+  playbackStatus,
   segment,
   speakerLabels,
   speakerNames,
@@ -522,6 +501,8 @@ function SegmentEditForm({
   const savedSpeakerLabel = savedSpeakerOverride ?? segment.speakerLabel;
   const hasUnsavedChanges =
     textValue !== savedText || speakerValue !== savedSpeakerLabel;
+  const isPlayingOrPreparing = playbackStatus !== null;
+  const isPreparing = playbackStatus === "preparing";
 
   function updateTextValue(nextText: string) {
     setTextValue(nextText);
@@ -638,7 +619,7 @@ function SegmentEditForm({
       className={`rounded-md border p-4 transition ${
         hasUnsavedChanges
           ? "border-orange-300 bg-orange-50"
-          : isActive
+          : isPlayingOrPreparing
           ? "border-emerald-300 bg-emerald-50"
           : isHighlighted
             ? "border-amber-300 bg-amber-50"
@@ -657,13 +638,14 @@ function SegmentEditForm({
             <button
               type="button"
               onClick={onPlay}
+              disabled={isPreparing}
               className={`inline-flex min-h-9 items-center justify-center rounded-md px-3 text-sm font-semibold transition ${
-                isActive
+                isPlayingOrPreparing
                   ? "bg-emerald-700 text-white hover:bg-emerald-800"
                   : "bg-zinc-950 text-white hover:bg-zinc-800"
-              }`}
+              } disabled:cursor-not-allowed disabled:bg-zinc-400`}
             >
-              {isActive ? "停止" : "再生"}
+              {isPreparing ? "準備中..." : isPlayingOrPreparing ? "停止" : "再生"}
             </button>
             {!skippedValue ? (
               <button

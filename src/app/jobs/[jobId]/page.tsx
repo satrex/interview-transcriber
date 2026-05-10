@@ -129,11 +129,27 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
     Number(job.expected_speaker_count || 2),
   );
   const adminSupabase = createAdminSupabaseClient();
-  const audioSignedUrl = await createAudioSignedUrl({
-    bucket: job.storage_bucket,
-    path: job.storage_path,
-    storage: adminSupabase.storage,
-  });
+  let audioSignedUrl: string | null = null;
+  let audioLoadError: string | null = null;
+
+  try {
+    audioSignedUrl = await createAudioSignedUrl({
+      bucket: job.storage_bucket,
+      path: job.storage_path,
+      storage: adminSupabase.storage,
+    });
+  } catch (error) {
+    audioLoadError =
+      error instanceof Error
+        ? error.message
+        : "音声ファイルの署名付きURLを作成できませんでした。";
+    console.error("[job detail] failed to create audio signed URL", {
+      bucket: job.storage_bucket,
+      error,
+      jobId: job.id,
+      path: job.storage_path,
+    });
+  }
   const shouldExpandSystemDetails =
     job.status === "processing" || job.status === "failed";
 
@@ -147,7 +163,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-sm font-medium uppercase text-zinc-500">Job</p>
-            <h1 className="mt-2 break-words text-3xl font-semibold text-zinc-950">
+            <h1 className="mt-2 wrap-break-word text-3xl font-semibold text-zinc-950">
               {job.original_filename}
             </h1>
           </div>
@@ -244,6 +260,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
 
         <TranscriptMarkdown
           audioUrl={audioSignedUrl}
+          audioLoadError={audioLoadError}
           exportBaseName={job.original_filename}
           jobId={job.id}
           segmentEdits={segmentEdits}

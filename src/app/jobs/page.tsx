@@ -121,7 +121,7 @@ export default async function JobsPage() {
                   return (
                     <tr key={job.id} className="align-top">
                       <td className="max-w-72 px-4 py-4">
-                        <p className="break-words font-medium text-zinc-950">
+                        <p className="wrap-break-word font-medium text-zinc-950">
                           {job.original_filename}
                         </p>
                         {job.status === "failed" ? (
