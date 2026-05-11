@@ -130,7 +130,7 @@ export function UploadForm() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        setUploadError("ログインが必要です。");
+        setUploadError("ログイン状態を確認できませんでした。再ログインしてください。");
         return;
       }
 
@@ -165,7 +165,9 @@ export function UploadForm() {
       });
 
       if (result.error || !result.jobId) {
-        setUploadError(result.error || "文字起こしジョブの作成に失敗しました。");
+        setUploadError(
+          `ジョブ作成に失敗しました: ${result.error || "不明なエラーが発生しました。"}`,
+        );
         return;
       }
 
