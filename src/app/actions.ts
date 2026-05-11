@@ -334,9 +334,11 @@ export async function retryTranscriptionJob(
       .update({
         attempt_count: 0,
         completed_at: null,
+        error_code: null,
         error_message: null,
         failed_at: null,
         locked_at: null,
+        processed_audio_seconds: null,
         progress: 0,
         started_at: null,
         status: "queued",

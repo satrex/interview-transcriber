@@ -10,6 +10,7 @@ export type WorkerConfig = {
   audioChunkSeconds: number;
   openaiApiKey: string;
   openaiTranscriptionModel: string;
+  maxConcurrentJobs: number;
   lockTimeoutMinutes: number;
   maxLockRefreshFailures: number;
   maxAttempts: number;
@@ -31,6 +32,7 @@ export function loadConfig(): WorkerConfig {
     openaiApiKey: requireEnv("OPENAI_API_KEY"),
     openaiTranscriptionModel:
       process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-transcribe-diarize",
+    maxConcurrentJobs: parseMaxConcurrentJobs(process.env.MAX_CONCURRENT_JOBS),
     lockTimeoutMinutes: parsePositiveInteger(
       process.env.WORKER_LOCK_TIMEOUT_MINUTES,
       30,
@@ -47,6 +49,16 @@ export function loadConfig(): WorkerConfig {
       "WORKER_MAX_ATTEMPTS",
     ),
   };
+}
+
+function parseMaxConcurrentJobs(value: string | undefined) {
+  const parsed = parsePositiveInteger(value, 1, "MAX_CONCURRENT_JOBS");
+
+  if (parsed !== 1) {
+    throw new Error("MAX_CONCURRENT_JOBS must be 1. Parallel jobs are not enabled yet.");
+  }
+
+  return parsed;
 }
 
 function requireEnv(name: string) {

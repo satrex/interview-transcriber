@@ -33,6 +33,7 @@ SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 
 WORKER_ID=sakura-vps-1
+MAX_CONCURRENT_JOBS=1
 WORKER_LOCK_TIMEOUT_MINUTES=30
 WORKER_MAX_LOCK_REFRESH_FAILURES=3
 WORKER_MAX_ATTEMPTS=3
@@ -58,7 +59,15 @@ npm run dev
 
 The worker processes at most one claimable job and exits. If no queued or stale job exists, it logs `no claimable jobs found`.
 
-Job claiming is handled by the Supabase RPC function `claim_next_transcription_job`. It uses row locking so multiple workers do not claim the same job at the same time. A `processing` job whose `locked_at` is older than `WORKER_LOCK_TIMEOUT_MINUTES` can be claimed again until `WORKER_MAX_ATTEMPTS` is reached. While a worker is active, it refreshes `locked_at` periodically so a long-running job is not treated as stale. Transient Supabase communication failures are retried with exponential backoff; heartbeat refresh failures only stop the job after `WORKER_MAX_LOCK_REFRESH_FAILURES` consecutive failed refresh operations.
+Job claiming is handled by the Supabase RPC function `claim_next_transcription_job`. It uses row locking so multiple workers do not claim the same job at the same time. Keep `MAX_CONCURRENT_JOBS=1`; parallel job and parallel chunk processing are intentionally not enabled yet. A `processing` job whose `locked_at` is older than `WORKER_LOCK_TIMEOUT_MINUTES` can be claimed again until `WORKER_MAX_ATTEMPTS` is reached. While a worker is active, it refreshes `locked_at` periodically so a long-running job is not treated as stale. Transient Supabase communication failures are retried with exponential backoff; heartbeat refresh failures only stop the job after `WORKER_MAX_LOCK_REFRESH_FAILURES` consecutive failed refresh operations.
+
+OpenAI transcription API failures are classified separately from job attempts:
+
+- `quota_exceeded`: billing/quota 429, including `insufficient_quota`, is not retried. The job is marked `failed`.
+- `rate_limited`: non-quota 429 is retried inside the chunk call after 30 seconds and 60 seconds. If it still fails, the job is marked `failed`.
+- `openai_error`: other OpenAI API errors are retried inside the chunk call up to 3 times, then the job is marked `failed`.
+
+`attempt_count` means the number of times a worker claimed the job. Chunk-level OpenAI retries do not increment it.
 
 Chunk files are written under the job temporary directory with names like:
 
@@ -151,17 +160,23 @@ To test the same job again, reset it manually in Supabase:
 
 ```sql
 update transcription_jobs
-set status = 'queued',
+set
+    status = 'queued',
     progress = 0,
-    attempt_count = 0,
-    worker_id = null,
-    locked_at = null,
+    error_message = null,
+    error_code = null,
+    failed_at = null,
     started_at = null,
     completed_at = null,
-    failed_at = null,
-    error_message = null
+    locked_at = null,
+    worker_id = null,
+    attempt_count = 0,
+    processed_audio_seconds = null,
+    updated_at = now()
 where id = '<job-id>';
 
 delete from transcription_segments
 where job_id = '<job-id>';
 ```
+
+Delete existing `transcription_segments` before re-running if the failed job may have partial segments. Segments are treated as source transcript records for a job, so a reset should either remove partial rows first or confirm that the worker will clear and replace them before transcription.

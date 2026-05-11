@@ -33,6 +33,10 @@ export async function markJobAttemptFailed(
   job: TranscriptionJob,
   message: string,
   maxAttempts: number,
+  options: {
+    errorCode?: string;
+    processedAudioSeconds?: number | null;
+  } = {},
 ) {
   const attemptsExhausted = job.attempt_count >= maxAttempts;
 
@@ -50,8 +54,13 @@ export async function markJobAttemptFailed(
             progress: attemptsExhausted ? job.progress : 0,
             worker_id: attemptsExhausted ? job.worker_id : null,
             locked_at: attemptsExhausted ? job.locked_at : null,
+            error_code: attemptsExhausted ? options.errorCode || null : null,
             error_message: message,
             failed_at: attemptsExhausted ? new Date().toISOString() : null,
+            processed_audio_seconds:
+              typeof options.processedAudioSeconds === "number"
+                ? options.processedAudioSeconds
+                : job.processed_audio_seconds,
           })
           .eq("id", job.id)
           .eq("status", "processing")
@@ -238,6 +247,7 @@ export async function touchJobLock(supabase: SupabaseClient, job: TranscriptionJ
 export async function markJobCompleted(
   supabase: SupabaseClient,
   job: TranscriptionJob,
+  processedAudioSeconds: number | null,
 ) {
   const { data, error } = await retryTransientOperation(
     { operation: `mark job ${job.id} completed` },
@@ -248,7 +258,9 @@ export async function markJobCompleted(
           status: "completed",
           progress: 100,
           completed_at: new Date().toISOString(),
+          error_code: null,
           error_message: null,
+          processed_audio_seconds: processedAudioSeconds,
         })
         .eq("id", job.id)
         .eq("status", "processing")

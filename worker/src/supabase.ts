@@ -11,6 +11,7 @@ export type TranscriptionJob = {
   progress: number;
   audio_duration_sec: number | null;
   audio_chunk_duration_sec: number | null;
+  processed_audio_seconds: number | null;
   skipped_segments_count: number;
   attempt_count: number;
   worker_id: string | null;

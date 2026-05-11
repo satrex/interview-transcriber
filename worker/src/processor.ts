@@ -14,13 +14,40 @@ import {
 import { clearJobSegments, saveSegments } from "./segments.js";
 import { downloadJobAudio, uploadJobAudioChunks } from "./storage.js";
 import type { TranscriptionJob } from "./supabase.js";
-import { createOpenAIClient, transcribeChunk } from "./transcribe.js";
+import {
+  createOpenAIClient,
+  OpenAITranscriptionError,
+  transcribeChunk,
+} from "./transcribe.js";
 import { formatErrorMessage } from "./retry.js";
 
 export class PermanentJobFailure extends Error {
-  constructor(message: string) {
+  readonly errorCode = "processing_error";
+  readonly processedAudioSeconds: number | null;
+
+  constructor(message: string, processedAudioSeconds: number | null = null) {
     super(message);
     this.name = "PermanentJobFailure";
+    this.processedAudioSeconds = processedAudioSeconds;
+  }
+}
+
+export class FinalJobFailure extends Error {
+  readonly errorCode: string;
+  readonly processedAudioSeconds: number | null;
+
+  constructor(
+    message: string,
+    options: {
+      cause?: unknown;
+      errorCode: string;
+      processedAudioSeconds: number | null;
+    },
+  ) {
+    super(message, { cause: options.cause });
+    this.name = "FinalJobFailure";
+    this.errorCode = options.errorCode;
+    this.processedAudioSeconds = options.processedAudioSeconds;
   }
 }
 
@@ -30,6 +57,8 @@ export async function processJob(
   job: TranscriptionJob,
 ) {
   let jobTmpDir: string | null = null;
+  let audioDurationSec: number | null = null;
+  let processedAudioSeconds: number | null = null;
   const heartbeat = startHeartbeat(supabase, job, {
     lockTimeoutMinutes: config.lockTimeoutMinutes,
     maxFailures: config.maxLockRefreshFailures,
@@ -45,10 +74,11 @@ export async function processJob(
     );
 
     const audioInfo = await probeAudio(config.ffprobePath, downloaded.localPath);
+    audioDurationSec = audioInfo.durationSec;
 
     console.log("[worker] ffprobe audio info:");
     console.log(JSON.stringify(audioInfo, null, 2));
-    await updateJobAudioDuration(supabase, job, audioInfo.durationSec);
+    await updateJobAudioDuration(supabase, job, audioDurationSec);
 
     console.log(
       `[worker] splitting audio into ${config.audioChunkSeconds}s chunks`,
@@ -135,6 +165,11 @@ export async function processJob(
       await saveSegments(supabase, job.id, job.user_id, segments);
 
       const progress = calculateProgress(chunk.chunkIndex + 1, chunks.length);
+      processedAudioSeconds = calculateProcessedAudioSeconds({
+        audioDurationSec,
+        completedChunks: chunk.chunkIndex + 1,
+        chunkSeconds: config.audioChunkSeconds,
+      });
       await updateJobProgress(
         supabase,
         job,
@@ -150,13 +185,24 @@ export async function processJob(
     if (totalSavedSegmentsCount === 0) {
       throw new PermanentJobFailure(
         `OpenAI transcription produced 0 usable segments across ${chunks.length} chunk(s); skipped ${totalSkippedSegmentsCount} empty segment(s).`,
+        processedAudioSeconds,
       );
     }
 
-    await markJobCompleted(supabase, job);
+    await markJobCompleted(supabase, job, audioDurationSec);
     console.log(
       `[worker] completed job ${job.id}; saved ${totalSavedSegmentsCount} segment(s), skipped ${totalSkippedSegmentsCount} empty segment(s)`,
     );
+  } catch (error) {
+    if (error instanceof OpenAITranscriptionError) {
+      throw new FinalJobFailure(error.message, {
+        cause: error,
+        errorCode: error.errorCode,
+        processedAudioSeconds,
+      });
+    }
+
+    throw error;
   } finally {
     heartbeat.stop();
 
@@ -165,6 +211,20 @@ export async function processJob(
       console.log(`[worker] cleaned temporary directory ${jobTmpDir}`);
     }
   }
+}
+
+function calculateProcessedAudioSeconds(options: {
+  audioDurationSec: number | null;
+  chunkSeconds: number;
+  completedChunks: number;
+}) {
+  const processedByChunks = options.completedChunks * options.chunkSeconds;
+
+  if (options.audioDurationSec === null) {
+    return processedByChunks;
+  }
+
+  return Math.min(options.audioDurationSec, processedByChunks);
 }
 
 function startHeartbeat(

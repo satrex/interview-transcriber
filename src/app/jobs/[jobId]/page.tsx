@@ -11,6 +11,7 @@ import {
 } from "@/components/speaker-analysis-panel";
 import { TranscriptMarkdown } from "@/components/transcript-markdown";
 import { analyzeSpeakers } from "@/lib/speaker-analysis";
+import { getJobErrorDisplayMessage } from "@/lib/job-errors";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createAudioSignedUrl, getAudioBucketName } from "@/lib/storage";
@@ -32,6 +33,7 @@ type JobDetailRow = {
   audio_chunk_duration_sec?: number | string | null;
   audio_duration_sec: number | string | null;
   created_at: string;
+  error_code: string | null;
   error_message: string | null;
   expected_speaker_count: number | string | null;
   id: string;
@@ -45,10 +47,10 @@ type JobDetailRow = {
 };
 
 const JOB_DETAIL_SELECT_WITH_CHUNKS =
-  "id, original_filename, status, progress, audio_duration_sec, audio_chunk_duration_sec, skipped_segments_count, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at";
+  "id, original_filename, status, progress, audio_duration_sec, audio_chunk_duration_sec, skipped_segments_count, error_code, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at";
 
 const JOB_DETAIL_SELECT_BASE =
-  "id, original_filename, status, progress, audio_duration_sec, skipped_segments_count, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at";
+  "id, original_filename, status, progress, audio_duration_sec, skipped_segments_count, error_code, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at";
 
 export default async function JobDetailPage({ params }: JobDetailPageProps) {
   const { jobId } = await params;
@@ -250,7 +252,21 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
               <JobAutoRefresh status={job.status} />
             </div>
             <div className="sm:col-span-2">
-              <dt className="text-zinc-500">Error message</dt>
+              <dt className="text-zinc-500">Error</dt>
+              <dd className="mt-1 text-zinc-950">
+                {job.status === "failed"
+                  ? getJobErrorDisplayMessage(job.error_code || "unknown")
+                  : "なし"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-zinc-500">Error code</dt>
+              <dd className="mt-1 font-mono text-xs text-zinc-700">
+                {job.error_code || "なし"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-zinc-500">Raw error message</dt>
               <dd className="mt-1 text-zinc-950">
                 {job.error_message || "なし"}
               </dd>
@@ -292,7 +308,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
 
           {job.error_message ? (
             <p className="mt-6 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {job.error_message}
+              {getJobErrorDisplayMessage(job.error_code || "unknown")}
             </p>
           ) : null}
 

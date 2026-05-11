@@ -2,6 +2,7 @@ import Link from "next/link";
 import { logout } from "@/app/actions";
 import { JobAutoRefresh } from "@/components/job-auto-refresh";
 import { JobRowActions } from "@/components/job-row-actions";
+import { getJobErrorDisplayMessage } from "@/lib/job-errors";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 type JobListItem = {
@@ -12,6 +13,7 @@ type JobListItem = {
   audio_duration_sec: number | string | null;
   segment_count: number | string | null;
   segment_duration_sec: number | string | null;
+  error_code: string | null;
   error_message: string | null;
   attempt_count: number | null;
   created_at: string;
@@ -126,7 +128,9 @@ export default async function JobsPage() {
                         </p>
                         {job.status === "failed" ? (
                           <p className="mt-2 line-clamp-3 text-xs leading-5 text-red-700">
-                            {job.error_message || "失敗しました。"}
+                            {getJobErrorDisplayMessage(
+                              job.error_code || "unknown",
+                            )}
                           </p>
                         ) : null}
                       </td>

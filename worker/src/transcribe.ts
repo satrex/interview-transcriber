@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import OpenAI from "openai";
 import type { AudioChunk } from "./ffmpeg.js";
+import { formatErrorMessage } from "./retry.js";
 
 export type NormalizedSegment = {
   speakerLabel: string;
@@ -16,6 +17,27 @@ export type TranscribedChunk = {
   skippedSegmentsCount: number;
   sourceSegmentsCount: number;
 };
+
+export type OpenAITranscriptionErrorCode =
+  | "quota_exceeded"
+  | "rate_limited"
+  | "openai_error";
+
+export class OpenAITranscriptionError extends Error {
+  readonly errorCode: OpenAITranscriptionErrorCode;
+
+  constructor(
+    message: string,
+    options: {
+      cause: unknown;
+      errorCode: OpenAITranscriptionErrorCode;
+    },
+  ) {
+    super(message, { cause: options.cause });
+    this.name = "OpenAITranscriptionError";
+    this.errorCode = options.errorCode;
+  }
+}
 
 type DiarizedTranscriptionResponse = {
   segments?: Array<{
@@ -36,15 +58,14 @@ export async function transcribeChunk(options: {
   chunk: AudioChunk;
   chunkStartSec: number;
 }): Promise<TranscribedChunk> {
-  const transcription = (await options.openai.audio.transcriptions.create({
-    file: createReadStream(options.chunk.path),
-    model: options.model,
-    response_format: "diarized_json",
-    chunking_strategy: "auto",
-  })) as DiarizedTranscriptionResponse;
+  const transcription = await createTranscriptionWithRetry(options);
 
   if (!Array.isArray(transcription.segments)) {
-    throw new Error("OpenAI transcription response did not include segments.");
+    const error = new Error("OpenAI transcription response did not include segments.");
+    throw new OpenAITranscriptionError(error.message, {
+      cause: error,
+      errorCode: "openai_error",
+    });
   }
 
   const segments: NormalizedSegment[] = [];
@@ -75,6 +96,122 @@ export async function transcribeChunk(options: {
     skippedSegmentsCount,
     sourceSegmentsCount: transcription.segments.length,
   };
+}
+
+async function createTranscriptionWithRetry(options: {
+  openai: OpenAI;
+  model: string;
+  chunk: AudioChunk;
+}) {
+  let attempt = 1;
+
+  while (true) {
+    try {
+      return (await options.openai.audio.transcriptions.create({
+        file: createReadStream(options.chunk.path),
+        model: options.model,
+        response_format: "diarized_json",
+        chunking_strategy: "auto",
+      })) as DiarizedTranscriptionResponse;
+    } catch (error) {
+      const classification = classifyOpenAITranscriptionError(error);
+
+      if (!classification.retryable || attempt >= classification.maxAttempts) {
+        throw new OpenAITranscriptionError(formatErrorMessage(error), {
+          cause: error,
+          errorCode: classification.errorCode,
+        });
+      }
+
+      const delayMs = classification.delayMs(attempt);
+      console.warn(
+        `[worker] OpenAI transcription ${classification.errorCode} for chunk ${options.chunk.chunkIndex}; retrying attempt ${attempt + 1}/${classification.maxAttempts} in ${delayMs}ms: ${formatErrorMessage(error)}`,
+      );
+      await sleep(delayMs);
+      attempt += 1;
+    }
+  }
+}
+
+function classifyOpenAITranscriptionError(error: unknown): {
+  delayMs: (attempt: number) => number;
+  errorCode: OpenAITranscriptionErrorCode;
+  maxAttempts: number;
+  retryable: boolean;
+} {
+  const message = formatErrorMessage(error).toLowerCase();
+  const apiCode = extractOpenAIErrorCode(error).toLowerCase();
+  const status = extractOpenAIStatus(error);
+  const isQuotaFailure =
+    apiCode === "insufficient_quota" ||
+    message.includes("exceeded your current quota") ||
+    message.includes("check your plan and billing");
+
+  if (isQuotaFailure) {
+    return {
+      delayMs: () => 0,
+      errorCode: "quota_exceeded",
+      maxAttempts: 1,
+      retryable: false,
+    };
+  }
+
+  if (
+    status === 429 ||
+    message.includes("rate limit") ||
+    message.includes("too many requests")
+  ) {
+    return {
+      delayMs: (attempt) => attempt * 30_000,
+      errorCode: "rate_limited",
+      maxAttempts: 3,
+      retryable: true,
+    };
+  }
+
+  return {
+    delayMs: (attempt) => {
+      const baseDelayMs = 2_000 * 2 ** (attempt - 1);
+      const jitterMs = Math.floor(Math.random() * 1_000);
+      return Math.min(10_000, baseDelayMs) + jitterMs;
+    },
+    errorCode: "openai_error",
+    maxAttempts: 4,
+    retryable: true,
+  };
+}
+
+function extractOpenAIErrorCode(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return "";
+  }
+
+  const directCode = "code" in error ? error.code : null;
+
+  if (typeof directCode === "string") {
+    return directCode;
+  }
+
+  const nestedError = "error" in error ? error.error : null;
+
+  if (nestedError && typeof nestedError === "object" && "code" in nestedError) {
+    const nestedCode = nestedError.code;
+    return typeof nestedCode === "string" ? nestedCode : "";
+  }
+
+  return "";
+}
+
+function extractOpenAIStatus(error: unknown) {
+  if (!error || typeof error !== "object" || !("status" in error)) {
+    return null;
+  }
+
+  return typeof error.status === "number" ? error.status : null;
+}
+
+function sleep(delayMs: number) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function normalizeSegment(

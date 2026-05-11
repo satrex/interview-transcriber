@@ -1,6 +1,6 @@
 import { loadConfig } from "./config.js";
 import { claimQueuedJob, markJobAttemptFailed } from "./jobs.js";
-import { PermanentJobFailure, processJob } from "./processor.js";
+import { FinalJobFailure, PermanentJobFailure, processJob } from "./processor.js";
 import { isTransientError } from "./retry.js";
 import { createSupabaseClient } from "./supabase.js";
 
@@ -10,6 +10,7 @@ async function main() {
 
   console.log(`[worker] starting ${config.workerId}`);
   console.log("[worker] node version:", process.version);
+  console.log(`[worker] max concurrent jobs: ${config.maxConcurrentJobs}`);
   console.log("[worker] looking for one claimable transcription job");
 
   const job = await claimQueuedJob(supabase, config.workerId, {
@@ -33,14 +34,27 @@ async function main() {
     const message = error instanceof Error ? error.message : "Unknown worker error";
     const failureType = isTransientError(error)
       ? "Supabase communication"
+      : error instanceof FinalJobFailure
+        ? error.errorCode
       : error instanceof PermanentJobFailure
         ? "permanent job"
         : "processing";
     console.error(`[worker] job ${job.id} failed (${failureType} failure): ${message}`);
-    const maxAttempts = error instanceof PermanentJobFailure
+    const isFinalFailure =
+      error instanceof PermanentJobFailure || error instanceof FinalJobFailure;
+    const maxAttempts = isFinalFailure
       ? job.attempt_count
       : config.maxAttempts;
-    await markJobAttemptFailed(supabase, job, message, maxAttempts);
+    await markJobAttemptFailed(supabase, job, message, maxAttempts, {
+      errorCode:
+        error instanceof FinalJobFailure || error instanceof PermanentJobFailure
+          ? error.errorCode
+          : undefined,
+      processedAudioSeconds:
+        error instanceof FinalJobFailure || error instanceof PermanentJobFailure
+          ? error.processedAudioSeconds
+          : undefined,
+    });
     process.exitCode = 1;
   }
 }
