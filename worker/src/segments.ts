@@ -82,7 +82,12 @@ export async function saveSegments(
 }
 
 const INITIAL_SKIP_TEXTS = new Set([
+  "hi",
+  "hmm",
+  "mmhmm",
+  "ohyeah",
   "うん",
+  "うんうん",
   "はい",
   "ええ",
   "ああ",
@@ -102,7 +107,7 @@ function shouldInitiallySkipSegment(text: string) {
 function normalizeInterjectionText(text: string) {
   return text
     .normalize("NFKC")
-    .replace(/\s+/g, "")
-    .replace(/[。、，,.!！?？…]+$/g, "")
+    .toLowerCase()
+    .replace(/[\s。、，,.!！?？…'"“”‘’\-–—]+/g, "")
     .trim();
 }

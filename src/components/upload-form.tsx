@@ -17,6 +17,10 @@ const initialState: UploadActionState = {
   error: null,
 };
 
+const LONG_AUDIO_WARNING_THRESHOLD_SEC = 60 * 60;
+const LONG_AUDIO_WARNING_MESSAGE =
+  "この音声は60分を超えています。処理や編集画面の動作が重くなる場合があります。必要に応じて1時間程度に分割してアップロードしてください。";
+
 type TranscodeResult = {
   file: File;
   originalSize: number;
@@ -37,6 +41,7 @@ export function UploadForm() {
   );
   const [isUploading, startUploadTransition] = useTransition();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [durationWarning, setDurationWarning] = useState<string | null>(null);
   const [status, setStatus] = useState<TranscodeStatus>({ phase: "idle" });
   const conversionIdRef = useRef(0);
 
@@ -45,11 +50,14 @@ export function UploadForm() {
     const conversionId = conversionIdRef.current + 1;
     conversionIdRef.current = conversionId;
     setSelectedFile(file);
+    setDurationWarning(null);
 
     if (!file) {
       setStatus({ phase: "idle" });
       return;
     }
+
+    void updateDurationWarning(file, conversionId);
 
     try {
       setStatus({ phase: "loading" });
@@ -75,6 +83,18 @@ export function UploadForm() {
       const message =
         error instanceof Error ? error.message : "音声変換に失敗しました。";
       setStatus({ phase: "error", message });
+    }
+  }
+
+  async function updateDurationWarning(file: File, conversionId: number) {
+    const durationSec = await loadAudioDuration(file);
+
+    if (conversionIdRef.current !== conversionId) {
+      return;
+    }
+
+    if (durationSec !== null && durationSec > LONG_AUDIO_WARNING_THRESHOLD_SEC) {
+      setDurationWarning(LONG_AUDIO_WARNING_MESSAGE);
     }
   }
 
@@ -128,6 +148,15 @@ export function UploadForm() {
       </div>
 
       <TranscodeSummary status={status} selectedFile={selectedFile} />
+
+      {durationWarning ? (
+        <p
+          aria-live="polite"
+          className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-900"
+        >
+          {durationWarning}
+        </p>
+      ) : null}
 
       {state.error ? (
         <p
@@ -224,6 +253,41 @@ function TranscodeSummary({
       選択中: {selectedFile.name}（{formatBytes(selectedFile.size)}）
     </p>
   ) : null;
+}
+
+function loadAudioDuration(file: File) {
+  return new Promise<number | null>((resolve) => {
+    const url = URL.createObjectURL(file);
+    const audio = new Audio();
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      resolve(null);
+    }, 10000);
+
+    function cleanup() {
+      window.clearTimeout(timeoutId);
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      audio.removeEventListener("error", handleError);
+      audio.removeAttribute("src");
+      URL.revokeObjectURL(url);
+    }
+
+    function handleLoadedMetadata() {
+      const durationSec = Number.isFinite(audio.duration) ? audio.duration : null;
+      cleanup();
+      resolve(durationSec);
+    }
+
+    function handleError() {
+      cleanup();
+      resolve(null);
+    }
+
+    audio.preload = "metadata";
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+    audio.addEventListener("error", handleError);
+    audio.src = url;
+  });
 }
 
 async function transcodeAudio(
