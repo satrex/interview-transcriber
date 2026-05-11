@@ -31,7 +31,6 @@ The transcription model is configured through `OPENAI_TRANSCRIPTION_MODEL` so it
 ```env
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
-SUPABASE_AUDIO_BUCKET=audio-uploads
 
 WORKER_ID=sakura-vps-1
 WORKER_LOCK_TIMEOUT_MINUTES=30

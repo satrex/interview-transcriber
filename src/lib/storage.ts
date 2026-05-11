@@ -1,6 +1,7 @@
 const ALLOWED_AUDIO_EXTENSIONS = new Set(["mp3", "m4a", "wav"]);
 
 const AUDIO_SIGNED_URL_EXPIRES_IN_SECONDS = 60 * 60 * 6;
+export const AUDIO_BUCKET = "audio";
 
 export const DEFAULT_AUDIO_CHUNK_DURATION_SEC = 600;
 
@@ -11,11 +12,11 @@ export type AudioFileMetadata = {
 };
 
 export function getAudioBucketName() {
-  return process.env.SUPABASE_AUDIO_BUCKET || "audio-uploads";
+  return AUDIO_BUCKET;
 }
 
 export function getBrowserAudioBucketName() {
-  return process.env.NEXT_PUBLIC_SUPABASE_AUDIO_BUCKET || "audio-uploads";
+  return AUDIO_BUCKET;
 }
 
 export function getMaxUploadSizeBytes() {

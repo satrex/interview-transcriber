@@ -20,7 +20,7 @@ Root `.env.local`:
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
-SUPABASE_AUDIO_BUCKET=audio-uploads
+SUPABASE_AUDIO_BUCKET=audio
 MAX_UPLOAD_SIZE_MB=1024
 ```
 
@@ -29,7 +29,7 @@ Worker `worker/.env`:
 ```env
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
-SUPABASE_AUDIO_BUCKET=audio-uploads
+SUPABASE_AUDIO_BUCKET=audio
 
 WORKER_ID=local-worker
 WORKER_LOCK_TIMEOUT_MINUTES=30
@@ -66,7 +66,7 @@ ffprobe -version
 
 Supabase Storage bucket を確認します。
 
-- bucket: `audio-uploads`
+- bucket: `audio`
 - public: false
 - allowed MIME types: `audio/mpeg`, `audio/m4a`, `audio/mp4`, `audio/x-m4a`, `audio/wav`, `audio/x-wav`
 - file size limit: 1 GB
@@ -266,7 +266,7 @@ where id = '<job-id>';
 - `completed_at` が設定されている
 - `failed_at is null`
 - `error_message is null`
-- `storage_bucket = 'audio-uploads'`
+- `storage_bucket = 'audio'`
 - `storage_path` が `jobs/{job_id}/source/` で始まる
 
 Segment records:
@@ -351,7 +351,7 @@ order by chunk_index asc, start_sec asc;
 
 Supabase Storage:
 
-- bucket: `audio-uploads`
+- bucket: `audio`
 - expected source path: `jobs/{job_id}/source/{safe_original_filename}`
 
 確認ポイント:
@@ -418,7 +418,7 @@ multi-chunk で見るポイント:
 - file extension が `mp3`, `m4a`, `wav` のいずれか
 - file size が `MAX_UPLOAD_SIZE_MB` 以下
 - `.env.local` の `SUPABASE_SERVICE_ROLE_KEY` が正しい
-- Storage bucket `audio-uploads` が存在する
+- Storage bucket `audio` が存在する
 - Storage MIME type 制限に合っている
 
 DB / Storage:
@@ -449,7 +449,7 @@ limit 20;
 
 確認:
 
-- `transcription_jobs.storage_bucket` が `audio-uploads`
+- `transcription_jobs.storage_bucket` が `audio`
 - `transcription_jobs.storage_path` が実 Storage path と一致
 - service role key が worker に設定されている
 - source file が削除されていない

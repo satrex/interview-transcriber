@@ -3,7 +3,6 @@ import "dotenv/config";
 export type WorkerConfig = {
   supabaseUrl: string;
   supabaseServiceRoleKey: string;
-  audioBucket: string;
   workerId: string;
   tmpDir: string;
   ffmpegPath: string;
@@ -20,7 +19,6 @@ export function loadConfig(): WorkerConfig {
   return {
     supabaseUrl: requireEnv("SUPABASE_URL"),
     supabaseServiceRoleKey: requireEnv("SUPABASE_SERVICE_ROLE_KEY"),
-    audioBucket: process.env.SUPABASE_AUDIO_BUCKET || "audio-uploads",
     workerId: process.env.WORKER_ID || "local-worker",
     tmpDir: process.env.WORKER_TMP_DIR || "/tmp/interview-transcriber",
     ffmpegPath: process.env.FFMPEG_PATH || "ffmpeg",

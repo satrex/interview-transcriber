@@ -6,6 +6,7 @@ import type { TranscriptionJob } from "./supabase.js";
 import type { AudioChunk } from "./ffmpeg.js";
 
 const SOURCE_AUDIO_SIGNED_URL_EXPIRES_IN_SECONDS = 60 * 60;
+const AUDIO_BUCKET = "audio";
 
 export async function downloadJobAudio(
   supabase: SupabaseClient,
@@ -48,7 +49,7 @@ async function createSourceAudioSignedUrl(
     { operation: `create signed source audio URL for job ${job.id}` },
     () =>
       supabase.storage
-        .from(job.storage_bucket)
+        .from(AUDIO_BUCKET)
         .createSignedUrl(
           job.storage_path,
           SOURCE_AUDIO_SIGNED_URL_EXPIRES_IN_SECONDS,
@@ -77,7 +78,7 @@ export async function uploadJobAudioChunks(
     const { error } = await retryTransientOperation(
       { operation: `upload browser audio chunk ${chunk.chunkIndex} for job ${job.id}` },
       () =>
-        supabase.storage.from(job.storage_bucket).upload(storagePath, file, {
+        supabase.storage.from(AUDIO_BUCKET).upload(storagePath, file, {
           contentType: "audio/wav",
           upsert: true,
         }),

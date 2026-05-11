@@ -13,8 +13,8 @@ insert into storage.buckets (
   allowed_mime_types
 )
 values (
-  'audio-uploads',
-  'audio-uploads',
+  'audio',
+  'audio',
   false,
   1073741824,
   array[
@@ -36,7 +36,7 @@ create table public.transcription_jobs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   original_filename text not null,
-  storage_bucket text not null default 'audio-uploads',
+  storage_bucket text not null default 'audio',
   storage_path text not null,
   status public.transcription_job_status not null default 'queued',
   progress integer not null default 0 check (progress >= 0 and progress <= 100),

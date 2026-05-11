@@ -13,7 +13,7 @@ import { TranscriptMarkdown } from "@/components/transcript-markdown";
 import { analyzeSpeakers } from "@/lib/speaker-analysis";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { createAudioSignedUrl } from "@/lib/storage";
+import { createAudioSignedUrl, getAudioBucketName } from "@/lib/storage";
 import {
   fetchAllSegmentEdits,
   fetchAllSegments,
@@ -181,7 +181,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
 
   try {
     audioSignedUrl = await createAudioSignedUrl({
-      bucket: job.storage_bucket,
+      bucket: getAudioBucketName(),
       path: job.storage_path,
       storage: adminSupabase.storage,
     });

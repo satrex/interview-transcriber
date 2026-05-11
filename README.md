@@ -25,10 +25,11 @@ Relevant environment variables:
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `SUPABASE_AUDIO_BUCKET` defaults to `audio-uploads`
-- `NEXT_PUBLIC_SUPABASE_AUDIO_BUCKET` defaults to `audio-uploads`; set this too
-  if the browser should upload to a non-default bucket
 - `MAX_UPLOAD_SIZE_MB` defaults to `1024`
+
+Audio uploads use the private Supabase Storage bucket `audio`. Keep any legacy
+`SUPABASE_AUDIO_BUCKET` / `NEXT_PUBLIC_SUPABASE_AUDIO_BUCKET` values unset or
+set to `audio` in deployed environments.
 
 ## Getting Started
 

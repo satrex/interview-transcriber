@@ -6,7 +6,7 @@
 
 - `transcription_jobs` は job owner だけが見えることを確認する。
 - `transcription_segments` は owner の job に紐づく segment だけが見えることを確認する。
-- Supabase Storage の `audio-uploads` は browser / authenticated user から直接読めないことを確認する。
+- Supabase Storage の `audio` は browser / authenticated user から直接読めないことを確認する。
 - worker は `service_role` で `queued` job を claim / update できることを確認する。
 - `SUPABASE_SERVICE_ROLE_KEY` が server / worker 側だけで使われ、browser に露出しないことを確認する。
 
@@ -24,7 +24,7 @@
 - [ ] `authenticated` role では `claim_next_transcription_job` を実行できないことを確認する。
 - [ ] service role / SQL Editor 管理者権限では `claim_next_transcription_job` で queued job を claim できることを確認する。
 - [ ] worker が `SUPABASE_SERVICE_ROLE_KEY` で queued job を claim / update できることを確認する。
-- [ ] authenticated user では Storage `audio-uploads` の object 一覧が見えないことを確認する。
+- [ ] authenticated user では Storage `audio` の object 一覧が見えないことを確認する。
 - [ ] `SUPABASE_SERVICE_ROLE_KEY` が browser に露出していないことを確認する。
 
 ## 前提
@@ -83,7 +83,7 @@ values
     '11111111-1111-1111-1111-111111111111',
     'USER_A_ID',
     'a-private-test.m4a',
-    'audio-uploads',
+    'audio',
     'jobs/11111111-1111-1111-1111-111111111111/source/a-private-test.m4a',
     'completed',
     100
@@ -92,7 +92,7 @@ values
     '22222222-2222-2222-2222-222222222222',
     'USER_B_ID',
     'b-private-test.m4a',
-    'audio-uploads',
+    'audio',
     'jobs/22222222-2222-2222-2222-222222222222/source/b-private-test.m4a',
     'completed',
     100
@@ -126,7 +126,7 @@ values
   );
 ```
 
-Storage の RLS 確認用に、Dashboard の Storage 画面から `audio-uploads` bucket に以下の path で小さな dummy file を置きます。
+Storage の RLS 確認用に、Dashboard の Storage 画面から `audio` bucket に以下の path で小さな dummy file を置きます。
 
 ```txt
 jobs/11111111-1111-1111-1111-111111111111/source/a-private-test.m4a
@@ -231,7 +231,7 @@ rollback;
 
 ## 5. Storage RLS を確認
 
-現在の設計では、source audio は browser から直接読ませません。`audio-uploads` bucket は private で、`storage.objects` に authenticated user 向け policy を作っていないため、ユーザーは object 一覧も download もできない想定です。
+現在の設計では、source audio は browser から直接読ませません。`audio` bucket は private で、`storage.objects` に authenticated user 向け policy を作っていないため、ユーザーは object 一覧も download もできない想定です。
 
 ```sql
 begin;
@@ -240,7 +240,7 @@ set local request.jwt.claim.sub = 'USER_A_ID';
 
 select bucket_id, name
 from storage.objects
-where bucket_id = 'audio-uploads'
+where bucket_id = 'audio'
 order by name;
 
 rollback;
@@ -259,7 +259,7 @@ set local request.jwt.claim.sub = 'USER_B_ID';
 
 select bucket_id, name
 from storage.objects
-where bucket_id = 'audio-uploads'
+where bucket_id = 'audio'
 order by name;
 
 rollback;
@@ -293,7 +293,7 @@ values (
   '33333333-3333-3333-3333-333333333333',
   'USER_A_ID',
   'worker-claim-test.m4a',
-  'audio-uploads',
+  'audio',
   'jobs/33333333-3333-3333-3333-333333333333/source/worker-claim-test.m4a',
   'queued',
   0
@@ -358,7 +358,7 @@ root `.env.local`:
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
-SUPABASE_AUDIO_BUCKET=audio-uploads
+SUPABASE_AUDIO_BUCKET=audio
 MAX_UPLOAD_SIZE_MB=1024
 ```
 
@@ -367,7 +367,7 @@ worker `.env`:
 ```env
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
-SUPABASE_AUDIO_BUCKET=audio-uploads
+SUPABASE_AUDIO_BUCKET=audio
 ```
 
 確認事項:

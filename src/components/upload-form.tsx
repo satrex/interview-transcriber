@@ -12,9 +12,9 @@ import {
 } from "@/app/actions";
 import { createBrowserSupabaseClient } from "@/lib/supabase/browser";
 import {
+  AUDIO_BUCKET,
   buildUserJobSourceStoragePath,
   getAudioContentType,
-  getBrowserAudioBucketName,
 } from "@/lib/storage";
 
 const LONG_AUDIO_WARNING_THRESHOLD_SEC = 60 * 60;
@@ -40,7 +40,9 @@ export function UploadForm() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [durationWarning, setDurationWarning] = useState<string | null>(null);
   const [durationSec, setDurationSec] = useState<number | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [storageUploadError, setStorageUploadError] = useState<string | null>(null);
+  const [jobCreateError, setJobCreateError] = useState<string | null>(null);
   const [status, setStatus] = useState<TranscodeStatus>({ phase: "idle" });
   const conversionIdRef = useRef(0);
 
@@ -51,7 +53,9 @@ export function UploadForm() {
     setSelectedFile(file);
     setDurationWarning(null);
     setDurationSec(null);
-    setUploadError(null);
+    setSubmitError(null);
+    setStorageUploadError(null);
+    setJobCreateError(null);
 
     if (!file) {
       setStatus({ phase: "idle" });
@@ -106,7 +110,9 @@ export function UploadForm() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setUploadError(null);
+    setSubmitError(null);
+    setStorageUploadError(null);
+    setJobCreateError(null);
 
     if (status.phase !== "ready") {
       setStatus({
@@ -130,28 +136,39 @@ export function UploadForm() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        setUploadError("ログイン状態を確認できませんでした。再ログインしてください。");
+        setSubmitError("ログイン状態を確認できませんでした。再ログインしてください。");
         return;
       }
 
       const jobId = crypto.randomUUID();
-      const bucketName = getBrowserAudioBucketName();
       const storagePath = buildUserJobSourceStoragePath(
         user.id,
         jobId,
         uploadFile.name,
       );
+      const firstPathSegment = storagePath.split("/")[0];
+
+      console.log({
+        bucket: AUDIO_BUCKET,
+        storagePath,
+        userId: user.id,
+        firstPathSegment,
+      });
+
+      if (firstPathSegment !== user.id) {
+        setSubmitError("Storage path がログインユーザーの領域ではありません。");
+        return;
+      }
+
       const { error: uploadError } = await supabase.storage
-        .from(bucketName)
+        .from(AUDIO_BUCKET)
         .upload(storagePath, uploadFile, {
           contentType,
           upsert: false,
         });
 
       if (uploadError) {
-        setUploadError(
-          `音声ファイルのアップロードに失敗しました: ${uploadError.message}`,
-        );
+        setStorageUploadError(uploadError.message);
         return;
       }
 
@@ -165,9 +182,7 @@ export function UploadForm() {
       });
 
       if (result.error || !result.jobId) {
-        setUploadError(
-          `ジョブ作成に失敗しました: ${result.error || "不明なエラーが発生しました。"}`,
-        );
+        setJobCreateError(result.error || "不明なエラーが発生しました。");
         return;
       }
 
@@ -175,7 +190,7 @@ export function UploadForm() {
       router.refresh();
     } catch (error) {
       const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
-      setUploadError(message);
+      setSubmitError(message);
     } finally {
       setIsUploading(false);
     }
@@ -220,12 +235,30 @@ export function UploadForm() {
         </p>
       ) : null}
 
-      {uploadError ? (
+      {submitError ? (
         <p
           aria-live="polite"
           className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
         >
-          {uploadError}
+          {submitError}
+        </p>
+      ) : null}
+
+      {storageUploadError ? (
+        <p
+          aria-live="polite"
+          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+        >
+          音声ファイルのアップロードに失敗しました: {storageUploadError}
+        </p>
+      ) : null}
+
+      {jobCreateError ? (
+        <p
+          aria-live="polite"
+          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+        >
+          ジョブ作成に失敗しました: {jobCreateError}
         </p>
       ) : null}
 

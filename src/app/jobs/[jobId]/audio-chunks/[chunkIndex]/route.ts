@@ -4,6 +4,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   buildJobAudioChunkStoragePath,
   createAudioSignedUrl,
+  getAudioBucketName,
 } from "@/lib/storage";
 
 export async function GET(
@@ -33,7 +34,7 @@ export async function GET(
 
   const { data: job, error } = await supabase
     .from("transcription_jobs")
-    .select("id, storage_bucket, audio_chunk_duration_sec")
+    .select("id, audio_chunk_duration_sec")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -68,7 +69,7 @@ export async function GET(
   try {
     const adminSupabase = createAdminSupabaseClient();
     const signedUrl = await createAudioSignedUrl({
-      bucket: job.storage_bucket,
+      bucket: getAudioBucketName(),
       path: chunkPath,
       storage: adminSupabase.storage,
     });

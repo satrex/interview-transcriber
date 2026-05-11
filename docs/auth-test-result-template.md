@@ -35,7 +35,7 @@
 | 8 | `authenticated` role では `claim_next_transcription_job` を実行できなかった |  |  |
 | 9 | service role / SQL Editor 管理者権限では queued job を claim できた |  |  |
 | 10 | worker が `SUPABASE_SERVICE_ROLE_KEY` で queued job を claim / update できた |  |  |
-| 11 | authenticated user では Storage `audio-uploads` の object 一覧が見えなかった |  |  |
+| 11 | authenticated user では Storage `audio` の object 一覧が見えなかった |  |  |
 | 12 | `SUPABASE_SERVICE_ROLE_KEY` が browser に露出していないことを確認できた |  |  |
 | 13 | `test-user-a` でログインし、画面に A の `user_id` が表示された |  |  |
 | 14 | `test-user-b` でログインし、画面に B の `user_id` が表示された |  |  |
