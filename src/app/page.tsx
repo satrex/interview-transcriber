@@ -60,10 +60,10 @@ export default async function Home() {
           ) : (
             <>
               <h1 className="mt-3 text-3xl font-semibold text-zinc-950">
-                ログイン
+                インタビュー文字起こしツール
               </h1>
               <p className="mt-3 max-w-2xl text-zinc-600">
-                音声アップロードには Supabase Auth の email/password ログインが必要です。
+                Googleアカウントでログインしてください。
               </p>
 
               <div className="mt-8">
