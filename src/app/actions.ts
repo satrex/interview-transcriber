@@ -5,14 +5,22 @@ import { redirect } from "next/navigation";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
-  buildJobSourceStoragePath,
   getAudioBucketName,
-  getAudioContentType,
-  validateAudioFile,
+  validateAudioFileMetadata,
 } from "@/lib/storage";
 
-export type UploadActionState = {
+export type CreateJobActionInput = {
+  jobId: string;
+  storagePath: string;
+  fileName: string;
+  fileSize: number;
+  contentType?: string | null;
+  durationSec?: number | null;
+};
+
+export type CreateJobActionState = {
   error: string | null;
+  jobId?: string;
 };
 
 export type LoginActionState = {
@@ -97,23 +105,31 @@ export async function logout() {
   redirect("/");
 }
 
-export async function createTranscriptionJob(
-  _previousState: UploadActionState,
-  formData: FormData,
-): Promise<UploadActionState> {
-  const file = formData.get("audio");
-
-  if (!(file instanceof File)) {
-    return { error: "音声ファイルを選択してください。" };
-  }
-
-  const validationError = validateAudioFile(file);
+export async function createJobAction(
+  input: CreateJobActionInput,
+): Promise<CreateJobActionState> {
+  const validationError = validateAudioFileMetadata({
+    fileName: input.fileName,
+    fileSize: input.fileSize,
+    contentType: input.contentType,
+  });
 
   if (validationError) {
     return { error: validationError };
   }
 
-  let jobId: string | null = null;
+  if (!isUuid(input.jobId)) {
+    return { error: "ジョブIDが不正です。" };
+  }
+
+  if (!input.storagePath) {
+    return { error: "Storage path が指定されていません。" };
+  }
+
+  const durationSec =
+    typeof input.durationSec === "number" && Number.isFinite(input.durationSec)
+      ? input.durationSec
+      : null;
 
   try {
     const supabase = await createServerSupabaseClient();
@@ -126,37 +142,53 @@ export async function createTranscriptionJob(
       return { error: "ログインが必要です。" };
     }
 
-    jobId = crypto.randomUUID();
+    const expectedPathPrefix = `${user.id}/${input.jobId}/`;
+
+    if (!input.storagePath.startsWith(expectedPathPrefix)) {
+      return { error: "Storage path がログインユーザーの領域ではありません。" };
+    }
 
     const adminSupabase = createAdminSupabaseClient();
     const bucketName = getAudioBucketName();
-    const storagePath = buildJobSourceStoragePath(jobId, file.name);
-
-    const { error: uploadError } = await adminSupabase.storage
+    const object = splitStoragePath(input.storagePath);
+    const { data: uploadedObjects, error: listError } = await adminSupabase.storage
       .from(bucketName)
-      .upload(storagePath, file, {
-        contentType: getAudioContentType(file.name, file.type),
-        upsert: false,
+      .list(object.directory, {
+        limit: 1,
+        search: object.filename,
       });
 
-    if (uploadError) {
-      return { error: `音声ファイルのアップロードに失敗しました: ${uploadError.message}` };
+    if (listError) {
+      return {
+        error: `アップロード済み音声ファイルの確認に失敗しました: ${listError.message}`,
+      };
+    }
+
+    const uploadedObject = uploadedObjects?.find(
+      (item) => item.name === object.filename,
+    );
+
+    if (!uploadedObject) {
+      return { error: "アップロード済み音声ファイルがStorageに見つかりません。" };
     }
 
     const { error: insertError } = await adminSupabase
       .from("transcription_jobs")
       .insert({
-        id: jobId,
+        id: input.jobId,
         user_id: user.id,
-        original_filename: file.name,
+        original_filename: input.fileName,
         storage_bucket: bucketName,
-        storage_path: storagePath,
+        storage_path: input.storagePath,
+        audio_duration_sec: durationSec,
+        audio_file_size_bytes: input.fileSize,
+        audio_content_type: input.contentType || null,
         status: "queued",
         progress: 0,
       });
 
     if (insertError) {
-      await adminSupabase.storage.from(bucketName).remove([storagePath]);
+      await adminSupabase.storage.from(bucketName).remove([input.storagePath]);
       return { error: `文字起こしジョブの作成に失敗しました: ${insertError.message}` };
     }
   } catch (error) {
@@ -164,7 +196,9 @@ export async function createTranscriptionJob(
     return { error: message };
   }
 
-  redirect(`/jobs/${jobId}`);
+  revalidatePath("/");
+  revalidatePath("/jobs");
+  return { error: null, jobId: input.jobId };
 }
 
 export async function deleteTranscriptionJob(
@@ -735,6 +769,22 @@ function getTextValue(formData: FormData, key: string) {
 function getRawTextValue(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value : "";
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
+}
+
+function splitStoragePath(storagePath: string) {
+  const parts = storagePath.split("/");
+  const filename = parts.pop() || "";
+
+  return {
+    directory: parts.join("/"),
+    filename,
+  };
 }
 
 async function deleteJobSourceAudio(options: { bucket: string; path: string }) {

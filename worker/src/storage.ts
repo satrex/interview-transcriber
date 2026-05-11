@@ -5,6 +5,8 @@ import { retryTransientOperation } from "./retry.js";
 import type { TranscriptionJob } from "./supabase.js";
 import type { AudioChunk } from "./ffmpeg.js";
 
+const SOURCE_AUDIO_SIGNED_URL_EXPIRES_IN_SECONDS = 60 * 60;
+
 export async function downloadJobAudio(
   supabase: SupabaseClient,
   job: TranscriptionJob,
@@ -16,18 +18,19 @@ export async function downloadJobAudio(
   const filename = basename(job.storage_path) || "source-audio";
   const localPath = join(jobTmpDir, filename);
 
-  const { data, error } = await retryTransientOperation(
-    { operation: `download source audio for job ${job.id}` },
-    () => supabase.storage.from(job.storage_bucket).download(job.storage_path),
+  const signedUrl = await createSourceAudioSignedUrl(supabase, job);
+  const response = await retryTransientOperation(
+    { operation: `fetch source audio for job ${job.id}` },
+    () => fetch(signedUrl),
   );
 
-  if (error || !data) {
+  if (!response.ok) {
     throw new Error(
-      `Failed to download ${job.storage_path}: ${error?.message || "empty response"}`,
+      `Failed to download ${job.storage_path}: ${response.status} ${response.statusText}`,
     );
   }
 
-  const buffer = Buffer.from(await data.arrayBuffer());
+  const buffer = Buffer.from(await response.arrayBuffer());
   await writeFile(localPath, buffer);
 
   return {
@@ -35,6 +38,30 @@ export async function downloadJobAudio(
     localPath,
     bytes: buffer.byteLength,
   };
+}
+
+async function createSourceAudioSignedUrl(
+  supabase: SupabaseClient,
+  job: TranscriptionJob,
+) {
+  const { data, error } = await retryTransientOperation(
+    { operation: `create signed source audio URL for job ${job.id}` },
+    () =>
+      supabase.storage
+        .from(job.storage_bucket)
+        .createSignedUrl(
+          job.storage_path,
+          SOURCE_AUDIO_SIGNED_URL_EXPIRES_IN_SECONDS,
+        ),
+  );
+
+  if (error || !data?.signedUrl) {
+    throw new Error(
+      `Failed to create signed URL for ${job.storage_path}: ${error?.message || "empty response"}`,
+    );
+  }
+
+  return data.signedUrl;
 }
 
 export async function uploadJobAudioChunks(

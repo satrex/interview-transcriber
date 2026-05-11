@@ -15,6 +15,21 @@ The ffmpeg core files are copied from `node_modules/@ffmpeg/core` to
 `public/ffmpeg` by `npm install` via the `postinstall` script. The generated
 `public/ffmpeg` files are not committed.
 
+After browser-side encoding, audio files are uploaded directly from the browser
+to Supabase Storage. The Next.js Server Action receives only JSON metadata
+(`storagePath`, file name, size, content type, and duration) and creates a
+queued `transcription_jobs` row.
+
+Relevant environment variables:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_AUDIO_BUCKET` defaults to `audio-uploads`
+- `NEXT_PUBLIC_SUPABASE_AUDIO_BUCKET` defaults to `audio-uploads`; set this too
+  if the browser should upload to a non-default bucket
+- `MAX_UPLOAD_SIZE_MB` defaults to `1024`
+
 ## Getting Started
 
 First, run the development server:

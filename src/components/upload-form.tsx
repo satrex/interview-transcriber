@@ -3,19 +3,19 @@
 import {
   type ChangeEvent,
   type FormEvent,
-  useActionState,
   useRef,
   useState,
-  useTransition,
 } from "react";
+import { useRouter } from "next/navigation";
 import {
-  createTranscriptionJob,
-  type UploadActionState,
+  createJobAction,
 } from "@/app/actions";
-
-const initialState: UploadActionState = {
-  error: null,
-};
+import { createBrowserSupabaseClient } from "@/lib/supabase/browser";
+import {
+  buildUserJobSourceStoragePath,
+  getAudioContentType,
+  getBrowserAudioBucketName,
+} from "@/lib/storage";
 
 const LONG_AUDIO_WARNING_THRESHOLD_SEC = 60 * 60;
 const LONG_AUDIO_WARNING_MESSAGE =
@@ -35,13 +35,12 @@ type TranscodeStatus =
   | { phase: "error"; message: string };
 
 export function UploadForm() {
-  const [state, submitAction] = useActionState(
-    createTranscriptionJob,
-    initialState,
-  );
-  const [isUploading, startUploadTransition] = useTransition();
+  const router = useRouter();
+  const [isUploading, setIsUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [durationWarning, setDurationWarning] = useState<string | null>(null);
+  const [durationSec, setDurationSec] = useState<number | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [status, setStatus] = useState<TranscodeStatus>({ phase: "idle" });
   const conversionIdRef = useRef(0);
 
@@ -51,6 +50,8 @@ export function UploadForm() {
     conversionIdRef.current = conversionId;
     setSelectedFile(file);
     setDurationWarning(null);
+    setDurationSec(null);
+    setUploadError(null);
 
     if (!file) {
       setStatus({ phase: "idle" });
@@ -87,19 +88,25 @@ export function UploadForm() {
   }
 
   async function updateDurationWarning(file: File, conversionId: number) {
-    const durationSec = await loadAudioDuration(file);
+    const loadedDurationSec = await loadAudioDuration(file);
 
     if (conversionIdRef.current !== conversionId) {
       return;
     }
 
-    if (durationSec !== null && durationSec > LONG_AUDIO_WARNING_THRESHOLD_SEC) {
+    setDurationSec(loadedDurationSec);
+
+    if (
+      loadedDurationSec !== null &&
+      loadedDurationSec > LONG_AUDIO_WARNING_THRESHOLD_SEC
+    ) {
       setDurationWarning(LONG_AUDIO_WARNING_MESSAGE);
     }
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setUploadError(null);
 
     if (status.phase !== "ready") {
       setStatus({
@@ -111,12 +118,65 @@ export function UploadForm() {
       return;
     }
 
-    const formData = new FormData();
-    formData.set("audio", status.result.file);
+    const uploadFile = status.result.file;
+    const contentType = getAudioContentType(uploadFile.name, uploadFile.type);
+    const supabase = createBrowserSupabaseClient();
+    setIsUploading(true);
 
-    startUploadTransition(() => {
-      submitAction(formData);
-    });
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        setUploadError("ログインが必要です。");
+        return;
+      }
+
+      const jobId = crypto.randomUUID();
+      const bucketName = getBrowserAudioBucketName();
+      const storagePath = buildUserJobSourceStoragePath(
+        user.id,
+        jobId,
+        uploadFile.name,
+      );
+      const { error: uploadError } = await supabase.storage
+        .from(bucketName)
+        .upload(storagePath, uploadFile, {
+          contentType,
+          upsert: false,
+        });
+
+      if (uploadError) {
+        setUploadError(
+          `音声ファイルのアップロードに失敗しました: ${uploadError.message}`,
+        );
+        return;
+      }
+
+      const result = await createJobAction({
+        jobId,
+        storagePath,
+        fileName: uploadFile.name,
+        fileSize: uploadFile.size,
+        contentType,
+        durationSec,
+      });
+
+      if (result.error || !result.jobId) {
+        setUploadError(result.error || "文字起こしジョブの作成に失敗しました。");
+        return;
+      }
+
+      router.push(`/jobs/${result.jobId}`);
+      router.refresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+      setUploadError(message);
+    } finally {
+      setIsUploading(false);
+    }
   }
 
   const busy = status.phase === "loading" || status.phase === "transcoding";
@@ -158,12 +218,12 @@ export function UploadForm() {
         </p>
       ) : null}
 
-      {state.error ? (
+      {uploadError ? (
         <p
           aria-live="polite"
           className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
         >
-          {state.error}
+          {uploadError}
         </p>
       ) : null}
 
