@@ -20,7 +20,7 @@ The transcription model is configured through `OPENAI_TRANSCRIPTION_MODEL` so it
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22+
 - npm
 - ffmpeg package installed on the VPS
 - Supabase project with the repository migrations applied
@@ -75,7 +75,10 @@ Install runtime dependencies:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y nodejs npm ffmpeg
+sudo apt-get install -y ca-certificates curl gnupg ffmpeg
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
+sudo apt-get install -y nodejs
+node -v
 ```
 
 Create a dedicated user:
@@ -93,7 +96,15 @@ npm run build
 sudo chown -R interview-worker:interview-worker /opt/interview-transcriber
 ```
 
-Create `/opt/interview-transcriber/worker/.env` from `.env.example` and fill in real values.
+Create `/etc/interview-transcriber/worker.env` from `.env.example` and fill in real values:
+
+```bash
+sudo mkdir -p /etc/interview-transcriber
+sudo install -o root -g interview-worker -m 0640 \
+  /opt/interview-transcriber/worker/.env.example \
+  /etc/interview-transcriber/worker.env
+sudoedit /etc/interview-transcriber/worker.env
+```
 
 Install the service:
 
@@ -107,10 +118,22 @@ sudo systemctl start interview-transcriber-worker
 Check logs:
 
 ```bash
-journalctl -u interview-transcriber-worker -f
+sudo systemctl status interview-transcriber-worker
+sudo journalctl -u interview-transcriber-worker -f
 ```
 
-The current service runs one job and exits. Because `Restart=on-failure`, it will not loop forever after a successful run. Continuous polling will be added later.
+The service uses Node.js 22 and starts with `/usr/bin/npm start` directly; it
+does not use a login shell. `Restart=always` keeps the worker polling by
+starting it again after the current one-job run exits.
+
+For OS rebuilds, use the bootstrap script after placing the repository at
+`/opt/interview-transcriber`:
+
+```bash
+sudo bash /opt/interview-transcriber/worker/scripts/bootstrap-sakura-vps.sh
+sudoedit /etc/interview-transcriber/worker.env
+sudo systemctl restart interview-transcriber-worker
+```
 
 ## Docker Compose
 

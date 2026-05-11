@@ -33,6 +33,12 @@ set to `audio` in deployed environments.
 
 ## Getting Started
 
+Use Node.js 22 for local development. If you use nvm:
+
+```bash
+nvm use
+```
+
 First, run the development server:
 
 ```bash

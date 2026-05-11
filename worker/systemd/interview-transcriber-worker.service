@@ -6,12 +6,13 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/interview-transcriber/worker
-EnvironmentFile=/opt/interview-transcriber/worker/.env
+EnvironmentFile=/etc/interview-transcriber/worker.env
 ExecStart=/usr/bin/npm start
-Restart=on-failure
+Restart=always
 RestartSec=10
 User=interview-worker
 Group=interview-worker
+TimeoutStopSec=60
 NoNewPrivileges=true
 PrivateTmp=true
 

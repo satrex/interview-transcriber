@@ -9,6 +9,7 @@ async function main() {
   const supabase = createSupabaseClient(config);
 
   console.log(`[worker] starting ${config.workerId}`);
+  console.log("[worker] node version:", process.version);
   console.log("[worker] looking for one claimable transcription job");
 
   const job = await claimQueuedJob(supabase, config.workerId, {

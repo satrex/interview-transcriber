@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
@@ -14,7 +17,7 @@
     "openai": "^6.36.0"
   },
   "devDependencies": {
-    "@types/node": "^20.19.25",
+    "@types/node": "^22.16.5",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
