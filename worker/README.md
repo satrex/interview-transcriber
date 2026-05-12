@@ -2,9 +2,10 @@
 
 This worker is intentionally separate from the Next.js app. It is meant to run on Sakura VPS and perform long-running audio work outside Vercel.
 
-The current implementation is a dry run:
+The worker:
 
-- Claims one `queued` job from Supabase
+- Runs as a long-lived worker process that polls Supabase for claimable jobs
+- Claims one `queued` job at a time from Supabase
 - Updates the job to `processing`
 - Safely retries failed or stale jobs up to 3 attempts
 - Downloads the source audio from Supabase Storage
@@ -37,6 +38,7 @@ MAX_CONCURRENT_JOBS=1
 WORKER_LOCK_TIMEOUT_MINUTES=30
 WORKER_MAX_LOCK_REFRESH_FAILURES=3
 WORKER_MAX_ATTEMPTS=3
+WORKER_POLL_INTERVAL_MS=10000
 WORKER_TMP_DIR=/tmp/interview-transcriber
 FFMPEG_PATH=ffmpeg
 FFPROBE_PATH=ffprobe
@@ -48,7 +50,7 @@ OPENAI_TRANSCRIPTION_MODEL=gpt-4o-transcribe-diarize
 
 Use the Supabase service role key only on the VPS. Do not expose it to the browser.
 
-## Local Dry Run
+## Local Run
 
 ```bash
 cd worker
@@ -57,7 +59,7 @@ cp .env.example .env
 npm run dev
 ```
 
-The worker processes at most one claimable job and exits. If no queued or stale job exists, it logs `no claimable jobs found`.
+The worker stays running and polls for claimable jobs every `WORKER_POLL_INTERVAL_MS` milliseconds. If no queued or stale job exists, it logs `no claimable jobs found` at most once per minute and waits for the next poll.
 
 Job claiming is handled by the Supabase RPC function `claim_next_transcription_job`. It uses row locking so multiple workers do not claim the same job at the same time. Keep `MAX_CONCURRENT_JOBS=1`; parallel job and parallel chunk processing are intentionally not enabled yet. A `processing` job whose `locked_at` is older than `WORKER_LOCK_TIMEOUT_MINUTES` can be claimed again until `WORKER_MAX_ATTEMPTS` is reached. While a worker is active, it refreshes `locked_at` periodically so a long-running job is not treated as stale. Transient Supabase communication failures are retried with exponential backoff; heartbeat refresh failures only stop the job after `WORKER_MAX_LOCK_REFRESH_FAILURES` consecutive failed refresh operations.
 
@@ -132,8 +134,8 @@ sudo journalctl -u interview-transcriber-worker -f
 ```
 
 The service uses Node.js 22 and starts with `/usr/bin/npm start` directly; it
-does not use a login shell. `Restart=always` keeps the worker polling by
-starting it again after the current one-job run exits.
+does not use a login shell. The worker is a long-lived process, so systemd uses
+`Restart=on-failure` and should normally show `Active: active (running)`.
 
 For OS rebuilds, use the bootstrap script after placing the repository at
 `/opt/interview-transcriber`:
@@ -152,7 +154,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-The Docker image installs `ffmpeg` and runs the same one-job dry run.
+The Docker image installs `ffmpeg` and runs the same long-lived polling worker.
 
 ## Resetting a Job
 

@@ -14,6 +14,7 @@ export type WorkerConfig = {
   lockTimeoutMinutes: number;
   maxLockRefreshFailures: number;
   maxAttempts: number;
+  pollIntervalMs: number;
 };
 
 export function loadConfig(): WorkerConfig {
@@ -47,6 +48,11 @@ export function loadConfig(): WorkerConfig {
       process.env.WORKER_MAX_ATTEMPTS,
       3,
       "WORKER_MAX_ATTEMPTS",
+    ),
+    pollIntervalMs: parsePositiveInteger(
+      process.env.WORKER_POLL_INTERVAL_MS,
+      10_000,
+      "WORKER_POLL_INTERVAL_MS",
     ),
   };
 }

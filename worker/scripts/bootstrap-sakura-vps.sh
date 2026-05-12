@@ -31,6 +31,11 @@ if [ ! -f "$ENV_DIR/worker.env" ]; then
   echo "Created $ENV_DIR/worker.env. Fill in real secrets before starting the service." >&2
 fi
 
+if ! grep -q '^WORKER_POLL_INTERVAL_MS=' "$ENV_DIR/worker.env"; then
+  printf '\nWORKER_POLL_INTERVAL_MS=10000\n' >> "$ENV_DIR/worker.env"
+  echo "Added WORKER_POLL_INTERVAL_MS=10000 to $ENV_DIR/worker.env." >&2
+fi
+
 cd "$APP_DIR/worker"
 npm ci
 npm run build
