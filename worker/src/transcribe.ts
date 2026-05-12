@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import OpenAI from "openai";
+import type { TranscriptionCreateParamsNonStreaming } from "openai/resources/audio/transcriptions";
 import type { AudioChunk } from "./ffmpeg.js";
 import { formatErrorMessage } from "./retry.js";
 
@@ -29,6 +30,7 @@ export type TranscribedChunk = {
 export type OpenAITranscriptionErrorCode =
   | "quota_exceeded"
   | "rate_limited"
+  | "unsupported_prompt_for_diarization"
   | "openai_error";
 
 export class OpenAITranscriptionError extends Error {
@@ -114,18 +116,27 @@ async function createTranscriptionWithRetry(options: {
   promptSuffix?: string | null;
 }) {
   let attempt = 1;
+  const useDiarization = true;
 
   while (true) {
     try {
-      return (await options.openai.audio.transcriptions.create({
+      const request: TranscriptionCreateParamsNonStreaming = {
         file: createReadStream(options.chunk.path),
         model: options.model,
         language: TRANSCRIPTION_LANGUAGE,
-        prompt: buildTranscriptionPrompt(options.promptSuffix),
-        response_format: "diarized_json",
+        response_format: useDiarization ? "diarized_json" : "verbose_json",
         temperature: TRANSCRIPTION_TEMPERATURE,
         chunking_strategy: "auto",
-      })) as DiarizedTranscriptionResponse;
+      };
+      const promptText = buildTranscriptionPrompt(options.promptSuffix);
+
+      if (!useDiarization && promptText) {
+        request.prompt = promptText;
+      }
+
+      return (await options.openai.audio.transcriptions.create(
+        request,
+      )) as DiarizedTranscriptionResponse;
     } catch (error) {
       const classification = classifyOpenAITranscriptionError(error);
 
@@ -163,11 +174,24 @@ function classifyOpenAITranscriptionError(error: unknown): {
     apiCode === "insufficient_quota" ||
     message.includes("exceeded your current quota") ||
     message.includes("check your plan and billing");
+  const isUnsupportedPromptForDiarization =
+    status === 400 &&
+    message.includes("prompt is not supported") &&
+    message.includes("diarization");
 
   if (isQuotaFailure) {
     return {
       delayMs: () => 0,
       errorCode: "quota_exceeded",
+      maxAttempts: 1,
+      retryable: false,
+    };
+  }
+
+  if (isUnsupportedPromptForDiarization) {
+    return {
+      delayMs: () => 0,
+      errorCode: "unsupported_prompt_for_diarization",
       maxAttempts: 1,
       retryable: false,
     };

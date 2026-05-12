@@ -18,7 +18,8 @@ prevents chunk-level automatic language detection from drifting toward English,
 which can otherwise happen when a chunk begins with silence, music, a short
 utterance, or an ambiguous phrase.
 
-The worker also sends this transcription prompt:
+When the selected transcription model supports prompts, the worker can use this
+transcription prompt:
 
 ```txt
 これは日本語のインタビュー音声です。
@@ -29,6 +30,17 @@ The worker also sends this transcription prompt:
 The important instruction is that the model should not translate and should keep
 the output in Japanese. The extra context reflects the expected source material:
 spoken interviews with backchannels, proper nouns, and music-related terms.
+
+Important limitation: diarization transcription models do not support the
+`prompt` parameter. For diarized jobs, the worker does not send `prompt` at all,
+including term dictionary hints. It keeps supported request parameters such as
+`language: "ja"` and `temperature: 0`.
+
+Term dictionary prompt injection is therefore only effective for a future
+non-diarized transcription path. For diarized transcription, dictionary support
+needs a different design, such as a model-supported glossary mechanism if one
+becomes available, or a human editing workflow after the source transcript is
+created.
 
 The worker sets:
 

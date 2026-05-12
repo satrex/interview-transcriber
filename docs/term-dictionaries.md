@@ -15,6 +15,12 @@ dictionary and appends enabled entries to the OpenAI transcription prompt. The
 model receives the terms as listening hints, while the original
 `transcription_segments` rows remain source transcript records.
 
+Current limitation: diarization transcription models do not support the
+`prompt` parameter. In the current speaker-diarized worker path, dictionary
+prompts are generated for future compatibility but omitted from the OpenAI
+request. They are only effective for a future non-diarized transcription path or
+another model-supported glossary mechanism.
+
 Do not use term dictionaries to automatically rewrite transcript text after the
 fact. Corrections should stay in the human editing layer.
 

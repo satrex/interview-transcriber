@@ -119,6 +119,11 @@ export async function processJob(
 
     const openai = createOpenAIClient(config.openaiApiKey);
     const termDictionaryPrompt = await loadTermDictionaryPrompt(supabase, job);
+    if (termDictionaryPrompt) {
+      console.warn(
+        "[worker] term dictionary prompt generated but omitted because prompt is not supported for diarization models",
+      );
+    }
     await assertJobClaimActive(supabase, job);
     await clearJobSegments(supabase, job.id);
     await updateJobProgress(supabase, job, job.progress, 0);
