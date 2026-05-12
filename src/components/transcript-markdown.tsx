@@ -13,8 +13,10 @@ import {
 import { useRouter } from "next/navigation";
 import {
   saveSegmentEdit,
+  saveSegmentSpeaker,
   saveSegmentSkip,
   type SegmentEditActionState,
+  type SegmentSpeakerActionState,
   type SegmentSkipActionState,
 } from "@/app/actions";
 import {
@@ -494,16 +496,22 @@ function SegmentEditForm({
   const isSkipped = edit?.isSkipped || false;
   const effectiveText = editedText ?? segment.text;
   const effectiveSpeakerLabel = speakerOverride ?? segment.speakerLabel;
-  const speakerName =
-    speakerNames[effectiveSpeakerLabel] || effectiveSpeakerLabel;
   const [actionState, setActionState] = useState(initialSegmentEditState);
   const [skipActionState, setSkipActionState] =
     useState<SegmentSkipActionState>({
       error: null,
       success: false,
     });
+  const [speakerActionState, setSpeakerActionState] =
+    useState<SegmentSpeakerActionState>({
+      error: null,
+      success: false,
+    });
   const [pending, setPending] = useState(false);
   const [skipPending, setSkipPending] = useState(false);
+  const [speakerPending, setSpeakerPending] = useState(false);
+  const speakerRequestIdRef = useRef(0);
+  const committedSpeakerLabelRef = useRef(effectiveSpeakerLabel);
   const [savedEditedText, setSavedEditedText] = useState<string | null>(
     editedText,
   );
@@ -513,11 +521,10 @@ function SegmentEditForm({
   const [textValue, setTextValue] = useState(effectiveText);
   const [speakerValue, setSpeakerValue] = useState(effectiveSpeakerLabel);
   const [skippedValue, setSkippedValue] = useState(isSkipped);
+  const speakerName = speakerNames[speakerValue] || speakerValue;
   const hasSavedEdit = savedEditedText !== null || savedSpeakerOverride !== null;
   const savedText = savedEditedText ?? segment.text;
-  const savedSpeakerLabel = savedSpeakerOverride ?? segment.speakerLabel;
-  const hasUnsavedChanges =
-    textValue !== savedText || speakerValue !== savedSpeakerLabel;
+  const hasUnsavedChanges = textValue !== savedText;
   const isPlayingOrPreparing = playbackStatus !== null;
   const isPreparing = playbackStatus === "preparing";
   const swipe = useSwipeSegmentAction({
@@ -531,18 +538,73 @@ function SegmentEditForm({
 
   function updateTextValue(nextText: string) {
     setTextValue(nextText);
-    onUnsavedChange(
-      segment.id,
-      nextText !== savedText || speakerValue !== savedSpeakerLabel,
-    );
+    onUnsavedChange(segment.id, nextText !== savedText);
   }
 
-  function updateSpeakerValue(nextSpeakerLabel: string) {
+  async function updateSpeakerValue(nextSpeakerLabel: string) {
+    if (nextSpeakerLabel === speakerValue) {
+      return;
+    }
+
+    const requestId = speakerRequestIdRef.current + 1;
+    speakerRequestIdRef.current = requestId;
+
     setSpeakerValue(nextSpeakerLabel);
-    onUnsavedChange(
-      segment.id,
-      textValue !== savedText || nextSpeakerLabel !== savedSpeakerLabel,
-    );
+    setSpeakerPending(true);
+    setSpeakerActionState({ error: null, success: false });
+    onLocalEditChange((current) => ({
+      editedText: current ? current.editedText : savedEditedText,
+      speakerOverride:
+        nextSpeakerLabel !== segment.speakerLabel ? nextSpeakerLabel : null,
+      isSkipped: current ? current.isSkipped : skippedValue,
+    }));
+
+    const formData = new FormData();
+    formData.set("jobId", jobId);
+    formData.set("segmentId", segment.id);
+    formData.set("speakerLabel", nextSpeakerLabel);
+
+    const result = await saveSegmentSpeaker(formData);
+
+    if (speakerRequestIdRef.current !== requestId) {
+      return;
+    }
+
+    setSpeakerPending(false);
+    setSpeakerActionState(result);
+
+    if (!result.success) {
+      const rollbackSpeakerLabel = committedSpeakerLabelRef.current;
+
+      setSpeakerValue(rollbackSpeakerLabel);
+      onLocalEditChange((current) => ({
+        editedText: current ? current.editedText : savedEditedText,
+        speakerOverride:
+          rollbackSpeakerLabel !== segment.speakerLabel
+            ? rollbackSpeakerLabel
+            : null,
+        isSkipped: current ? current.isSkipped : skippedValue,
+      }));
+      return;
+    }
+
+    const nextSavedEditedText = result.savedEditedText ?? null;
+    const nextSavedSpeakerOverride = result.savedSpeakerOverride ?? null;
+    const nextSavedSpeakerLabel =
+      nextSavedSpeakerOverride ?? segment.speakerLabel;
+    const nextSavedSkipped = result.savedIsSkipped ?? skippedValue;
+
+    committedSpeakerLabelRef.current = nextSavedSpeakerLabel;
+    setSavedEditedText(nextSavedEditedText);
+    setSavedSpeakerOverride(nextSavedSpeakerOverride);
+    setSpeakerValue(nextSavedSpeakerLabel);
+    setSkippedValue(nextSavedSkipped);
+    onLocalEditChange(() => ({
+      editedText: nextSavedEditedText,
+      speakerOverride: nextSavedSpeakerOverride,
+      isSkipped: nextSavedSkipped,
+    }));
+    router.refresh();
   }
 
   async function updateSkippedValue(nextSkipped: boolean) {
@@ -583,9 +645,13 @@ function SegmentEditForm({
     const nextSavedEditedText = result.savedEditedText ?? null;
     const nextSavedSpeakerOverride = result.savedSpeakerOverride ?? null;
     const nextSavedSkipped = result.savedIsSkipped ?? nextSkipped;
+    const nextSavedSpeakerLabel =
+      nextSavedSpeakerOverride ?? segment.speakerLabel;
 
+    committedSpeakerLabelRef.current = nextSavedSpeakerLabel;
     setSavedEditedText(nextSavedEditedText);
     setSavedSpeakerOverride(nextSavedSpeakerOverride);
+    setSpeakerValue(nextSavedSpeakerLabel);
     setSkippedValue(nextSavedSkipped);
     onLocalEditChange(() => ({
       editedText: nextSavedEditedText,
@@ -624,6 +690,7 @@ function SegmentEditForm({
     const nextSavedText = nextSavedEditedText ?? segment.text;
     const nextSavedSpeakerLabel = nextSavedSpeakerOverride ?? segment.speakerLabel;
 
+    committedSpeakerLabelRef.current = nextSavedSpeakerLabel;
     setSavedEditedText(nextSavedEditedText);
     setSavedSpeakerOverride(nextSavedSpeakerOverride);
     setTextValue(nextSavedText);
@@ -738,8 +805,9 @@ function SegmentEditForm({
         話者
         <select
           value={speakerValue}
-          onChange={(event) => updateSpeakerValue(event.target.value)}
+          onChange={(event) => void updateSpeakerValue(event.target.value)}
           className="mt-2 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200"
+          aria-busy={speakerPending}
         >
           {speakerLabels.map((speakerLabel) => (
             <option key={speakerLabel} value={speakerLabel}>
@@ -781,6 +849,16 @@ function SegmentEditForm({
       {skipPending ? (
         <p className="mt-3 text-xs text-zinc-500" aria-live="polite">
           skip状態を保存中...
+        </p>
+      ) : null}
+      {speakerPending ? (
+        <p className="mt-3 text-xs text-zinc-500" aria-live="polite">
+          話者変更を保存中...
+        </p>
+      ) : null}
+      {speakerActionState.error ? (
+        <p className="mt-3 text-sm text-red-700" aria-live="polite">
+          {speakerActionState.error}
         </p>
       ) : null}
       {skipActionState.error ? (

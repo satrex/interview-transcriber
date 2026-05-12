@@ -58,6 +58,14 @@ export type SegmentSkipActionState = {
   success: boolean;
 };
 
+export type SegmentSpeakerActionState = {
+  error: string | null;
+  savedEditedText?: string | null;
+  savedSpeakerOverride?: string | null;
+  savedIsSkipped?: boolean;
+  success: boolean;
+};
+
 export type DeleteJobActionState = {
   error: string | null;
   success: boolean;
@@ -738,6 +746,96 @@ export async function saveSegmentSkip(
     if (savedEditError || !savedEdit) {
       return {
         error: `skip状態の再読み込みに失敗しました: ${savedEditError?.message || "not found"}`,
+        success: false,
+      };
+    }
+
+    revalidatePath(`/jobs/${jobId}`);
+    return {
+      error: null,
+      savedEditedText:
+        typeof savedEdit.edited_text === "string" && savedEdit.edited_text.trim()
+          ? savedEdit.edited_text
+          : null,
+      savedSpeakerOverride:
+        typeof savedEdit.edited_speaker_label === "string" &&
+        savedEdit.edited_speaker_label.trim()
+          ? savedEdit.edited_speaker_label
+          : null,
+      savedIsSkipped: Boolean(savedEdit.is_skipped),
+      success: true,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
+export async function saveSegmentSpeaker(
+  formData: FormData,
+): Promise<SegmentSpeakerActionState> {
+  const jobId = getTextValue(formData, "jobId");
+  const segmentId = getTextValue(formData, "segmentId");
+  const speakerLabel = getTextValue(formData, "speakerLabel");
+
+  if (!jobId || !segmentId || !speakerLabel) {
+    return {
+      error: "ジョブ、segment、または話者が指定されていません。",
+      success: false,
+    };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。", success: false };
+    }
+
+    const { data: segment, error: segmentError } = await supabase
+      .from("transcription_segments")
+      .select("id, job_id, speaker_label")
+      .eq("id", segmentId)
+      .eq("job_id", jobId)
+      .single();
+
+    if (segmentError || !segment) {
+      return { error: "segmentが見つかりません。", success: false };
+    }
+
+    const { error: upsertError } = await supabase
+      .from("transcription_segment_edits")
+      .upsert(
+        {
+          edited_speaker_label:
+            speakerLabel !== segment.speaker_label ? speakerLabel : null,
+          job_id: jobId,
+          segment_id: segment.id,
+          user_id: user.id,
+        },
+        { onConflict: "segment_id" },
+      );
+
+    if (upsertError) {
+      return {
+        error: `話者変更の保存に失敗しました: ${upsertError.message}`,
+        success: false,
+      };
+    }
+
+    const { data: savedEdit, error: savedEditError } = await supabase
+      .from("transcription_segment_edits")
+      .select("edited_text, edited_speaker_label, is_skipped")
+      .eq("segment_id", segment.id)
+      .maybeSingle();
+
+    if (savedEditError || !savedEdit) {
+      return {
+        error: `話者変更の再読み込みに失敗しました: ${savedEditError?.message || "not found"}`,
         success: false,
       };
     }
