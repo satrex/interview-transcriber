@@ -3,6 +3,14 @@ import OpenAI from "openai";
 import type { AudioChunk } from "./ffmpeg.js";
 import { formatErrorMessage } from "./retry.js";
 
+export const TRANSCRIPTION_LANGUAGE = "ja";
+export const TRANSCRIPTION_PROMPT = [
+  "これは日本語のインタビュー音声です。",
+  "翻訳せず、日本語のまま文字起こししてください。",
+  "口語、相槌、固有名詞、音楽用語を含みます。",
+].join("\n");
+export const TRANSCRIPTION_TEMPERATURE = 0;
+
 export type NormalizedSegment = {
   speakerLabel: string;
   startSec: number;
@@ -110,7 +118,10 @@ async function createTranscriptionWithRetry(options: {
       return (await options.openai.audio.transcriptions.create({
         file: createReadStream(options.chunk.path),
         model: options.model,
+        language: TRANSCRIPTION_LANGUAGE,
+        prompt: TRANSCRIPTION_PROMPT,
         response_format: "diarized_json",
+        temperature: TRANSCRIPTION_TEMPERATURE,
         chunking_strategy: "auto",
       })) as DiarizedTranscriptionResponse;
     } catch (error) {
