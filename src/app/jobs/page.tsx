@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { logout } from "@/app/actions";
 import { JobAutoRefresh } from "@/components/job-auto-refresh";
-import { JobRowActions } from "@/components/job-row-actions";
-import { getJobErrorDisplayMessage } from "@/lib/job-errors";
+import { JobListRow } from "@/components/job-list-row";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 type JobListItem = {
@@ -121,49 +120,18 @@ export default async function JobsPage() {
                   const segmentCount = toNumber(job.segment_count) ?? 0;
 
                   return (
-                    <tr key={job.id} className="align-top">
-                      <td className="max-w-72 px-4 py-4">
-                        <p className="wrap-break-word font-medium text-zinc-950">
-                          {job.original_filename}
-                        </p>
-                        {job.status === "failed" ? (
-                          <p className="mt-2 line-clamp-3 text-xs leading-5 text-red-700">
-                            {getJobErrorDisplayMessage(
-                              job.error_code || "unknown",
-                            )}
-                          </p>
-                        ) : null}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4 text-zinc-700">
-                        {formatDateTime(job.created_at)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4 text-zinc-700">
-                        {formatDateTime(job.updated_at)}
-                      </td>
-                      <td className="px-4 py-4">
-                        <StatusBadge status={job.status} />
-                      </td>
-                      <td className="px-4 py-4">
-                        <ProgressValue
-                          progress={job.progress}
-                          showBar={job.status === "processing"}
-                        />
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4 text-zinc-700">
-                        {formatDuration(durationSec)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-4 text-zinc-700">
-                        {segmentCount.toLocaleString()}
-                      </td>
-                      <td className="px-4 py-4">
-                        <JobRowActions
-                          canOpenEditor={true}
-                          jobId={job.id}
-                          jobTitle={job.original_filename}
-                          status={job.status}
-                        />
-                      </td>
-                    </tr>
+                    <JobListRow
+                      key={job.id}
+                      createdAt={formatDateTime(job.created_at)}
+                      durationLabel={formatDuration(durationSec)}
+                      errorCode={job.error_code}
+                      id={job.id}
+                      originalFilename={job.original_filename}
+                      progress={job.progress}
+                      segmentCountLabel={segmentCount.toLocaleString()}
+                      status={job.status}
+                      updatedAt={formatDateTime(job.updated_at)}
+                    />
                   );
                 })}
               </tbody>
@@ -172,52 +140,6 @@ export default async function JobsPage() {
         )}
       </section>
     </main>
-  );
-}
-
-function StatusBadge({ status }: { status: JobListItem["status"] }) {
-  const classNameByStatus = {
-    completed: "border-emerald-200 bg-emerald-50 text-emerald-800",
-    failed: "border-red-200 bg-red-50 text-red-800",
-    processing: "border-amber-200 bg-amber-50 text-amber-800",
-    queued: "border-zinc-200 bg-zinc-50 text-zinc-700",
-  };
-
-  return (
-    <span
-      className={`inline-flex min-h-7 items-center rounded-md border px-2.5 text-xs font-semibold ${classNameByStatus[status]}`}
-    >
-      {status}
-    </span>
-  );
-}
-
-function ProgressValue({
-  progress,
-  showBar,
-}: {
-  progress: number;
-  showBar: boolean;
-}) {
-  const normalizedProgress = Math.min(100, Math.max(0, Number(progress) || 0));
-
-  if (!showBar) {
-    return <span className="font-medium text-zinc-800">{normalizedProgress}%</span>;
-  }
-
-  return (
-    <div className="w-32 space-y-2">
-      <div className="flex items-center justify-between text-xs text-zinc-600">
-        <span>処理中</span>
-        <span>{normalizedProgress}%</span>
-      </div>
-      <div className="h-2 overflow-hidden rounded-full bg-zinc-200">
-        <div
-          className="h-full rounded-full bg-zinc-950 transition-all"
-          style={{ width: `${normalizedProgress}%` }}
-        />
-      </div>
-    </div>
   );
 }
 

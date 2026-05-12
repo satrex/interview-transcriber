@@ -1,51 +1,14 @@
-"use client";
-
-import { useState } from "react";
-import { createBrowserSupabaseClient } from "@/lib/supabase/browser";
-
 type LoginFormProps = {
   authError?: string | null;
   nextPath?: string;
 };
 
 export function LoginForm({ authError = null, nextPath = "/" }: LoginFormProps) {
-  const [errorMessage, setErrorMessage] = useState<string | null>(
-    authError ? getAuthErrorMessage(authError) : null,
-  );
-  const [pending, setPending] = useState(false);
-
-  async function signInWithGoogle() {
-    setPending(true);
-    setErrorMessage(null);
-
-    try {
-      const supabase = createBrowserSupabaseClient();
-      const redirectUrl = new URL("/auth/callback", window.location.origin);
-
-      if (nextPath && nextPath !== "/") {
-        redirectUrl.searchParams.set("next", nextPath);
-      }
-
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: redirectUrl.toString(),
-        },
-      });
-
-      if (error) {
-        setErrorMessage(`Googleログインに失敗しました: ${error.message}`);
-        setPending(false);
-      }
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Googleログインの開始に失敗しました。",
-      );
-      setPending(false);
-    }
-  }
+  const googleLoginHref =
+    nextPath && nextPath !== "/"
+      ? `/auth/google?next=${encodeURIComponent(nextPath)}`
+      : "/auth/google";
+  const errorMessage = authError ? getAuthErrorMessage(authError) : null;
 
   return (
     <div className="space-y-4">
@@ -59,14 +22,12 @@ export function LoginForm({ authError = null, nextPath = "/" }: LoginFormProps) 
         </p>
       ) : null}
 
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() => void signInWithGoogle()}
-        className="inline-flex min-h-11 w-full items-center justify-center rounded-md bg-zinc-950 px-5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
+      <a
+        href={googleLoginHref}
+        className="relative z-10 inline-flex min-h-11 w-full touch-manipulation items-center justify-center rounded-md bg-zinc-950 px-5 text-sm font-semibold text-white transition hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2"
       >
-        {pending ? "Googleへ移動中..." : "Googleでログイン"}
-      </button>
+        Googleでログイン
+      </a>
     </div>
   );
 }

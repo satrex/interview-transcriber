@@ -1,6 +1,15 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type FormEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   saveSegmentEdit,
@@ -447,6 +456,9 @@ const initialSegmentEditState: SegmentEditActionState = {
   success: false,
 };
 
+const SEGMENT_SWIPE_THRESHOLD_PX = 72;
+const SEGMENT_SWIPE_MAX_OFFSET_PX = 100;
+
 type SegmentEditFormProps = {
   edit?: SegmentEdit;
   isHighlighted: boolean;
@@ -508,6 +520,14 @@ function SegmentEditForm({
     textValue !== savedText || speakerValue !== savedSpeakerLabel;
   const isPlayingOrPreparing = playbackStatus !== null;
   const isPreparing = playbackStatus === "preparing";
+  const swipe = useSwipeSegmentAction({
+    onSwipeLeft: onPlay,
+    onSwipeRight: () => {
+      if (!skipPending) {
+        void updateSkippedValue(!skippedValue);
+      }
+    },
+  });
 
   function updateTextValue(nextText: string) {
     setTextValue(nextText);
@@ -621,6 +641,8 @@ function SegmentEditForm({
     <form
       id={getSegmentEditDomId(segment.id)}
       onSubmit={(event) => void submitSegmentEdit(event)}
+      {...swipe.handlers}
+      style={swipe.style}
       className={`rounded-md border p-4 transition ${
         hasUnsavedChanges
           ? "border-orange-300 bg-orange-50"
@@ -652,15 +674,24 @@ function SegmentEditForm({
             >
               {isPreparing ? "準備中..." : isPlayingOrPreparing ? "停止" : "再生"}
             </button>
-            {!skippedValue ? (
-              <button
-                type="button"
-                onClick={onJumpToPreview}
-                className="inline-flex min-h-9 items-center justify-center rounded-md border border-zinc-300 bg-white px-3 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
-              >
-                全体プレビューへ
-              </button>
-            ) : null}
+            <a
+              href={`#${getSegmentPreviewDomId(segment.id)}`}
+              aria-disabled={skippedValue}
+              onClick={(event) => {
+                event.preventDefault();
+
+                if (!skippedValue) {
+                  onJumpToPreview();
+                }
+              }}
+              className={`inline-flex min-h-9 items-center justify-center rounded-md border px-3 text-sm font-semibold transition ${
+                skippedValue
+                  ? "cursor-not-allowed border-zinc-200 bg-zinc-100 text-zinc-400"
+                  : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50"
+              }`}
+            >
+              プレビューへ
+            </a>
             <span className="font-mono text-xs text-zinc-500">
               [{formatTimestamp(segment.startSec)} - {formatTimestamp(segment.endSec)}]
             </span>
@@ -779,6 +810,172 @@ function SegmentEditForm({
         </button>
       </div>
     </form>
+  );
+}
+
+function useSwipeSegmentAction({
+  onSwipeLeft,
+  onSwipeRight,
+}: {
+  onSwipeLeft: () => void;
+  onSwipeRight: () => void;
+}) {
+  const pointerStartRef = useRef<{
+    id: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const didTriggerSwipeRef = useRef(false);
+  const [translateX, setTranslateX] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isMobileSwipeEnabled, setIsMobileSwipeEnabled] = useState(false);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const mobileQuery = window.matchMedia(
+      "(pointer: coarse) and (max-width: 767px)",
+    );
+    const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    function syncQueries() {
+      setIsMobileSwipeEnabled(mobileQuery.matches);
+      setPrefersReducedMotion(motionQuery.matches);
+    }
+
+    syncQueries();
+    mobileQuery.addEventListener("change", syncQueries);
+    motionQuery.addEventListener("change", syncQueries);
+
+    return () => {
+      mobileQuery.removeEventListener("change", syncQueries);
+      motionQuery.removeEventListener("change", syncQueries);
+    };
+  }, []);
+
+  function resetPosition() {
+    pointerStartRef.current = null;
+    setIsDragging(false);
+    setTranslateX(0);
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLElement>) {
+    if (
+      !isMobileSwipeEnabled ||
+      event.button !== 0 ||
+      isInteractiveSwipeTarget(event.target)
+    ) {
+      return;
+    }
+
+    pointerStartRef.current = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+    };
+    didTriggerSwipeRef.current = false;
+    setIsDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLElement>) {
+    const start = pointerStartRef.current;
+
+    if (!start || start.id !== event.pointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - start.x;
+    const deltaY = event.clientY - start.y;
+
+    if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 12) {
+      resetPosition();
+      return;
+    }
+
+    if (Math.abs(deltaX) < 8) {
+      return;
+    }
+
+    event.preventDefault();
+    setTranslateX(
+      Math.max(
+        -SEGMENT_SWIPE_MAX_OFFSET_PX,
+        Math.min(SEGMENT_SWIPE_MAX_OFFSET_PX, deltaX),
+      ),
+    );
+  }
+
+  function handlePointerUp(event: ReactPointerEvent<HTMLElement>) {
+    const start = pointerStartRef.current;
+
+    if (!start || start.id !== event.pointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - start.x;
+
+    if (deltaX >= SEGMENT_SWIPE_THRESHOLD_PX) {
+      didTriggerSwipeRef.current = true;
+      onSwipeRight();
+    } else if (deltaX <= -SEGMENT_SWIPE_THRESHOLD_PX) {
+      didTriggerSwipeRef.current = true;
+      onSwipeLeft();
+    }
+
+    resetPosition();
+
+    if (didTriggerSwipeRef.current) {
+      window.setTimeout(() => {
+        didTriggerSwipeRef.current = false;
+      }, 250);
+    }
+  }
+
+  function handlePointerCancel() {
+    resetPosition();
+  }
+
+  function handleClickCapture(event: ReactMouseEvent<HTMLElement>) {
+    if (!didTriggerSwipeRef.current) {
+      return;
+    }
+
+    didTriggerSwipeRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  const style: CSSProperties = isMobileSwipeEnabled
+    ? {
+        touchAction: "pan-y",
+        transform: translateX ? `translateX(${translateX}px)` : undefined,
+        transition:
+          isDragging || prefersReducedMotion
+            ? undefined
+            : "transform 160ms ease-out",
+      }
+    : {};
+
+  return {
+    handlers: {
+      onClickCapture: handleClickCapture,
+      onPointerCancel: handlePointerCancel,
+      onPointerDown: handlePointerDown,
+      onPointerMove: handlePointerMove,
+      onPointerUp: handlePointerUp,
+    },
+    style,
+  };
+}
+
+function isInteractiveSwipeTarget(target: EventTarget) {
+  return (
+    target instanceof Element &&
+    Boolean(
+      target.closest(
+        "a, button, input, label, select, summary, textarea, [contenteditable='true']",
+      ),
+    )
   );
 }
 
