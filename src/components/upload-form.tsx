@@ -34,10 +34,15 @@ type TranscodeStatus =
   | { phase: "ready"; result: TranscodeResult }
   | { phase: "error"; message: string };
 
-export function UploadForm() {
+export function UploadForm({
+  dictionaries = [],
+}: {
+  dictionaries?: Array<{ id: string; name: string }>;
+}) {
   const router = useRouter();
   const [isUploading, setIsUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [termDictionaryId, setTermDictionaryId] = useState("");
   const [durationWarning, setDurationWarning] = useState<string | null>(null);
   const [durationSec, setDurationSec] = useState<number | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -179,6 +184,7 @@ export function UploadForm() {
         fileSize: uploadFile.size,
         contentType,
         durationSec,
+        termDictionaryId: termDictionaryId || null,
       });
 
       if (result.error || !result.jobId) {
@@ -225,6 +231,33 @@ export function UploadForm() {
       </div>
 
       <TranscodeSummary status={status} selectedFile={selectedFile} />
+
+      <div className="space-y-2">
+        <label
+          htmlFor="termDictionaryId"
+          className="block text-sm font-medium text-zinc-800"
+        >
+          使用する用語辞書
+        </label>
+        <select
+          id="termDictionaryId"
+          name="termDictionaryId"
+          value={termDictionaryId}
+          disabled={isUploading}
+          onChange={(event) => setTermDictionaryId(event.currentTarget.value)}
+          className="block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 disabled:cursor-not-allowed disabled:bg-zinc-100"
+        >
+          <option value="">使用しない</option>
+          {dictionaries.map((dictionary) => (
+            <option key={dictionary.id} value={dictionary.id}>
+              {dictionary.name}
+            </option>
+          ))}
+        </select>
+        <p className="text-sm text-zinc-500">
+          辞書は文字起こし前のpromptヒントとして使われます。原文segmentの後処理置換は行いません。
+        </p>
+      </div>
 
       {durationWarning ? (
         <p

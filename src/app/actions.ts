@@ -2,12 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import {
   getAudioBucketName,
   validateAudioFileMetadata,
 } from "@/lib/storage";
+import {
+  normalizePriority,
+  parseAliases,
+  parseDictionaryYaml,
+} from "@/lib/term-dictionaries";
 
 export type CreateJobActionInput = {
   jobId: string;
@@ -16,6 +22,7 @@ export type CreateJobActionInput = {
   fileSize: number;
   contentType?: string | null;
   durationSec?: number | null;
+  termDictionaryId?: string | null;
 };
 
 export type CreateJobActionState = {
@@ -72,6 +79,11 @@ export type DeleteJobActionState = {
 };
 
 export type RetryJobActionState = {
+  error: string | null;
+  success: boolean;
+};
+
+export type TermDictionaryActionState = {
   error: string | null;
   success: boolean;
 };
@@ -156,6 +168,28 @@ export async function createJobAction(
       return { error: "Storage path がログインユーザーの領域ではありません。" };
     }
 
+    const termDictionaryId =
+      input.termDictionaryId && isUuid(input.termDictionaryId)
+        ? input.termDictionaryId
+        : null;
+
+    if (input.termDictionaryId && !termDictionaryId) {
+      return { error: "用語辞書IDが不正です。" };
+    }
+
+    if (termDictionaryId) {
+      const { data: dictionary, error: dictionaryError } = await supabase
+        .from("term_dictionaries")
+        .select("id")
+        .eq("id", termDictionaryId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (dictionaryError || !dictionary) {
+        return { error: "指定された用語辞書が見つからないか、使用権限がありません。" };
+      }
+    }
+
     const adminSupabase = createAdminSupabaseClient();
     const bucketName = getAudioBucketName();
     const object = splitStoragePath(input.storagePath);
@@ -191,6 +225,7 @@ export async function createJobAction(
         audio_duration_sec: durationSec,
         audio_file_size_bytes: input.fileSize,
         audio_content_type: input.contentType || null,
+        term_dictionary_id: termDictionaryId,
         status: "queued",
         progress: 0,
       });
@@ -369,6 +404,342 @@ export async function retryTranscriptionJob(
     const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
     return { error: message, success: false };
   }
+}
+
+export async function createTermDictionary(
+  formData: FormData,
+): Promise<void> {
+  const name = getTextValue(formData, "name");
+  const description = getTextValue(formData, "description");
+
+  if (!name) {
+    redirect("/settings/dictionaries?error=missing_name");
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    redirect("/login");
+  }
+
+  const { data, error } = await supabase
+    .from("term_dictionaries")
+    .insert({
+      description: description || null,
+      name,
+      user_id: user.id,
+    })
+    .select("id")
+    .single();
+
+  if (error || !data) {
+    redirect(
+      `/settings/dictionaries?error=${encodeURIComponent(error?.message || "create_failed")}`,
+    );
+  }
+
+  revalidatePath("/settings/dictionaries");
+  redirect(`/settings/dictionaries/${data.id}`);
+}
+
+export async function updateTermDictionary(
+  _previousState: TermDictionaryActionState,
+  formData: FormData,
+): Promise<TermDictionaryActionState> {
+  const dictionaryId = getTextValue(formData, "dictionaryId");
+  const name = getTextValue(formData, "name");
+  const description = getTextValue(formData, "description");
+
+  if (!isUuid(dictionaryId) || !name) {
+    return { error: "辞書IDまたは辞書名が不正です。", success: false };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。", success: false };
+    }
+
+    const { error } = await supabase
+      .from("term_dictionaries")
+      .update({ description: description || null, name })
+      .eq("id", dictionaryId)
+      .eq("user_id", user.id);
+
+    if (error) {
+      return { error: `辞書の保存に失敗しました: ${error.message}`, success: false };
+    }
+
+    revalidatePath("/settings/dictionaries");
+    revalidatePath(`/settings/dictionaries/${dictionaryId}`);
+    return { error: null, success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
+export async function deleteTermDictionary(formData: FormData): Promise<void> {
+  const dictionaryId = getTextValue(formData, "dictionaryId");
+
+  if (!isUuid(dictionaryId)) {
+    redirect("/settings/dictionaries?error=invalid_dictionary");
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    redirect("/login");
+  }
+
+  await supabase
+    .from("term_dictionaries")
+    .delete()
+    .eq("id", dictionaryId)
+    .eq("user_id", user.id);
+
+  revalidatePath("/settings/dictionaries");
+  redirect("/settings/dictionaries");
+}
+
+export async function createTermDictionaryEntry(
+  _previousState: TermDictionaryActionState,
+  formData: FormData,
+): Promise<TermDictionaryActionState> {
+  const dictionaryId = getTextValue(formData, "dictionaryId");
+  const term = getTextValue(formData, "term");
+
+  if (!isUuid(dictionaryId) || !term) {
+    return { error: "辞書IDまたは用語が不正です。", success: false };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const sortOrder = await getNextTermSortOrder(supabase, dictionaryId);
+    const { error } = await supabase.from("term_dictionary_entries").insert({
+      aliases: parseAliases(getTextValue(formData, "aliases")),
+      category: getTextValue(formData, "category") || null,
+      description: getTextValue(formData, "description") || null,
+      dictionary_id: dictionaryId,
+      is_enabled: formData.get("isEnabled") !== "false",
+      priority: normalizePriority(getTextValue(formData, "priority"), 100),
+      reading: getTextValue(formData, "reading") || null,
+      sort_order: sortOrder,
+      term,
+    });
+
+    if (error) {
+      return { error: `用語の追加に失敗しました: ${error.message}`, success: false };
+    }
+
+    revalidatePath(`/settings/dictionaries/${dictionaryId}`);
+    return { error: null, success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
+export async function updateTermDictionaryEntry(
+  _previousState: TermDictionaryActionState,
+  formData: FormData,
+): Promise<TermDictionaryActionState> {
+  const dictionaryId = getTextValue(formData, "dictionaryId");
+  const entryId = getTextValue(formData, "entryId");
+  const term = getTextValue(formData, "term");
+
+  if (!isUuid(dictionaryId) || !isUuid(entryId) || !term) {
+    return { error: "辞書ID、用語ID、または用語が不正です。", success: false };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const { error } = await supabase
+      .from("term_dictionary_entries")
+      .update({
+        aliases: parseAliases(getTextValue(formData, "aliases")),
+        category: getTextValue(formData, "category") || null,
+        description: getTextValue(formData, "description") || null,
+        is_enabled: formData.get("isEnabled") === "true",
+        priority: normalizePriority(getTextValue(formData, "priority"), 100),
+        reading: getTextValue(formData, "reading") || null,
+        sort_order: normalizePriority(getTextValue(formData, "sortOrder"), 0),
+        term,
+      })
+      .eq("id", entryId)
+      .eq("dictionary_id", dictionaryId);
+
+    if (error) {
+      return { error: `用語の保存に失敗しました: ${error.message}`, success: false };
+    }
+
+    revalidatePath(`/settings/dictionaries/${dictionaryId}`);
+    return { error: null, success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
+export async function deleteTermDictionaryEntry(
+  formData: FormData,
+): Promise<void> {
+  const dictionaryId = getTextValue(formData, "dictionaryId");
+  const entryId = getTextValue(formData, "entryId");
+
+  if (!isUuid(dictionaryId) || !isUuid(entryId)) {
+    redirect("/settings/dictionaries");
+  }
+
+  const supabase = await createServerSupabaseClient();
+  await supabase
+    .from("term_dictionary_entries")
+    .delete()
+    .eq("id", entryId)
+    .eq("dictionary_id", dictionaryId);
+
+  revalidatePath(`/settings/dictionaries/${dictionaryId}`);
+  redirect(`/settings/dictionaries/${dictionaryId}`);
+}
+
+export async function moveTermDictionaryEntry(
+  formData: FormData,
+): Promise<void> {
+  const dictionaryId = getTextValue(formData, "dictionaryId");
+  const entryId = getTextValue(formData, "entryId");
+  const direction = getTextValue(formData, "direction");
+
+  if (!isUuid(dictionaryId) || !isUuid(entryId)) {
+    redirect("/settings/dictionaries");
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const { data: entries } = await supabase
+    .from("term_dictionary_entries")
+    .select("id, sort_order")
+    .eq("dictionary_id", dictionaryId)
+    .order("sort_order", { ascending: true })
+    .order("priority", { ascending: true })
+    .order("term", { ascending: true });
+  const rows = (entries || []) as Array<{ id: string; sort_order: number }>;
+  const currentIndex = rows.findIndex((row) => row.id === entryId);
+  const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+
+  if (currentIndex >= 0 && targetIndex >= 0 && targetIndex < rows.length) {
+    const current = rows[currentIndex];
+    const target = rows[targetIndex];
+    await supabase
+      .from("term_dictionary_entries")
+      .update({ sort_order: target.sort_order })
+      .eq("id", current.id)
+      .eq("dictionary_id", dictionaryId);
+    await supabase
+      .from("term_dictionary_entries")
+      .update({ sort_order: current.sort_order })
+      .eq("id", target.id)
+      .eq("dictionary_id", dictionaryId);
+  }
+
+  revalidatePath(`/settings/dictionaries/${dictionaryId}`);
+  redirect(`/settings/dictionaries/${dictionaryId}`);
+}
+
+export async function importTermDictionaryYaml(
+  formData: FormData,
+): Promise<void> {
+  const textareaYaml = getRawTextValue(formData, "yaml");
+  const fileValue = formData.get("yamlFile");
+  const fileYaml =
+    fileValue &&
+    typeof fileValue === "object" &&
+    "size" in fileValue &&
+    Number(fileValue.size) > 0 &&
+    "text" in fileValue &&
+    typeof fileValue.text === "function"
+      ? await fileValue.text()
+      : "";
+  const yaml = fileYaml || textareaYaml;
+
+  if (!yaml.trim()) {
+    redirect("/settings/dictionaries?error=missing_yaml");
+  }
+
+  let parsed: ReturnType<typeof parseDictionaryYaml>;
+
+  try {
+    parsed = parseDictionaryYaml(yaml);
+  } catch (error) {
+    redirect(
+      `/settings/dictionaries?error=${encodeURIComponent(
+        error instanceof Error ? error.message : "yaml_parse_failed",
+      )}`,
+    );
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    redirect("/login");
+  }
+
+  const { data: dictionary, error: dictionaryError } = await supabase
+    .from("term_dictionaries")
+    .insert({
+      description: parsed.description,
+      name: parsed.name,
+      user_id: user.id,
+    })
+    .select("id")
+    .single();
+
+  if (dictionaryError || !dictionary) {
+    redirect(
+      `/settings/dictionaries?error=${encodeURIComponent(
+        dictionaryError?.message || "import_failed",
+      )}`,
+    );
+  }
+
+  const { error: entriesError } = await supabase
+    .from("term_dictionary_entries")
+    .insert(
+      parsed.terms.map((term, index) => ({
+        aliases: term.aliases,
+        category: term.category,
+        description: term.description,
+        dictionary_id: dictionary.id,
+        priority: term.priority,
+        reading: term.reading,
+        sort_order: index,
+        term: term.term,
+      })),
+    );
+
+  if (entriesError) {
+    redirect(
+      `/settings/dictionaries/${dictionary.id}?error=${encodeURIComponent(entriesError.message)}`,
+    );
+  }
+
+  revalidatePath("/settings/dictionaries");
+  redirect(`/settings/dictionaries/${dictionary.id}`);
 }
 
 export async function saveQualityNotes(
@@ -864,6 +1235,25 @@ export async function saveSegmentSpeaker(
 function getTextValue(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
+}
+
+async function getNextTermSortOrder(supabase: SupabaseClient, dictionaryId: string) {
+  const { data } = await supabase
+    .from("term_dictionary_entries")
+    .select("sort_order")
+    .eq("dictionary_id", dictionaryId)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const lastSortOrder =
+    data &&
+    typeof data === "object" &&
+    "sort_order" in data &&
+    typeof data.sort_order === "number"
+      ? data.sort_order
+      : -1;
+
+  return lastSortOrder + 1;
 }
 
 function getRawTextValue(formData: FormData, key: string) {

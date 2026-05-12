@@ -9,6 +9,17 @@ export default async function Home() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  const { data: dictionaries, error: dictionariesError } = user
+    ? await supabase
+        .from("term_dictionaries")
+        .select("id, name")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false })
+    : { data: [], error: null };
+
+  if (dictionariesError) {
+    throw new Error(`Failed to load term dictionaries: ${dictionariesError.message}`);
+  }
 
   return (
     <div className="min-h-screen bg-zinc-50">
@@ -45,15 +56,21 @@ export default async function Home() {
               </div>
 
               <div className="mt-8">
-                <UploadForm />
+                <UploadForm dictionaries={(dictionaries || []) as Array<{ id: string; name: string }>} />
               </div>
 
-              <div className="mt-8 border-t border-zinc-200 pt-6">
+              <div className="mt-8 flex flex-wrap gap-3 border-t border-zinc-200 pt-6">
                 <Link
                   href="/jobs"
                   className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
                 >
                   プロジェクト一覧を開く
+                </Link>
+                <Link
+                  href="/settings/dictionaries"
+                  className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+                >
+                  用語辞書を管理
                 </Link>
               </div>
             </>

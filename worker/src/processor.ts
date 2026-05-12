@@ -14,6 +14,7 @@ import {
 import { clearJobSegments, saveSegments } from "./segments.js";
 import { downloadJobAudio, uploadJobAudioChunks } from "./storage.js";
 import type { TranscriptionJob } from "./supabase.js";
+import { loadTermDictionaryPrompt } from "./term-dictionaries.js";
 import {
   createOpenAIClient,
   OpenAITranscriptionError,
@@ -117,6 +118,7 @@ export async function processJob(
     }
 
     const openai = createOpenAIClient(config.openaiApiKey);
+    const termDictionaryPrompt = await loadTermDictionaryPrompt(supabase, job);
     await assertJobClaimActive(supabase, job);
     await clearJobSegments(supabase, job.id);
     await updateJobProgress(supabase, job, job.progress, 0);
@@ -138,6 +140,7 @@ export async function processJob(
         model: config.openaiTranscriptionModel,
         chunk,
         chunkStartSec,
+        promptSuffix: termDictionaryPrompt,
       }).catch((error) => {
         console.error(
           `[worker] transcription API failed for job ${job.id} chunk ${chunk.chunkIndex}: ${formatErrorMessage(error)}`,

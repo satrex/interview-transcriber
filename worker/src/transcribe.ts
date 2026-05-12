@@ -65,6 +65,7 @@ export async function transcribeChunk(options: {
   model: string;
   chunk: AudioChunk;
   chunkStartSec: number;
+  promptSuffix?: string | null;
 }): Promise<TranscribedChunk> {
   const transcription = await createTranscriptionWithRetry(options);
 
@@ -110,6 +111,7 @@ async function createTranscriptionWithRetry(options: {
   openai: OpenAI;
   model: string;
   chunk: AudioChunk;
+  promptSuffix?: string | null;
 }) {
   let attempt = 1;
 
@@ -119,7 +121,7 @@ async function createTranscriptionWithRetry(options: {
         file: createReadStream(options.chunk.path),
         model: options.model,
         language: TRANSCRIPTION_LANGUAGE,
-        prompt: TRANSCRIPTION_PROMPT,
+        prompt: buildTranscriptionPrompt(options.promptSuffix),
         response_format: "diarized_json",
         temperature: TRANSCRIPTION_TEMPERATURE,
         chunking_strategy: "auto",
@@ -142,6 +144,10 @@ async function createTranscriptionWithRetry(options: {
       attempt += 1;
     }
   }
+}
+
+function buildTranscriptionPrompt(promptSuffix?: string | null) {
+  return [TRANSCRIPTION_PROMPT, promptSuffix?.trim()].filter(Boolean).join("\n\n");
 }
 
 function classifyOpenAITranscriptionError(error: unknown): {
