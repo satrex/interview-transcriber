@@ -10,7 +10,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { useRouter } from "next/navigation";
 import {
   saveSegmentEdit,
   saveSegmentSpeaker,
@@ -84,14 +83,20 @@ export function TranscriptMarkdown({
   );
   const [effectiveSegmentEditMap, setEffectiveSegmentEditMap] =
     useState<SegmentEditMap>(segmentEdits);
+  const [committedSegmentEditMap, setCommittedSegmentEditMap] =
+    useState<SegmentEditMap>(segmentEdits);
 
   const effectiveSegments = useMemo(
     () => buildEffectiveSegments(segments, effectiveSegmentEditMap),
     [effectiveSegmentEditMap, segments],
   );
+  const committedSegments = useMemo(
+    () => buildEffectiveSegments(segments, committedSegmentEditMap),
+    [committedSegmentEditMap, segments],
+  );
   const blocks = useMemo(
-    () => buildTranscriptBlocks(effectiveSegments, speakerNames),
-    [effectiveSegments, speakerNames],
+    () => buildTranscriptBlocks(committedSegments, speakerNames),
+    [committedSegments, speakerNames],
   );
   const previewBlocks = useMemo(
     () => buildPreviewBlocks(effectiveSegments, speakerNames),
@@ -208,6 +213,16 @@ export function TranscriptMarkdown({
     setEffectiveSegmentEditMap((current) => ({
       ...current,
       [segmentId]: updater(current[segmentId]),
+    }));
+  }
+
+  function commitLocalSegmentEdit(
+    segmentId: string,
+    edit: SegmentEdit,
+  ) {
+    setCommittedSegmentEditMap((current) => ({
+      ...current,
+      [segmentId]: edit,
     }));
   }
 
@@ -379,6 +394,9 @@ export function TranscriptMarkdown({
                 updateLocalSegmentEdit(segment.id, updater)
               }
               onPlay={() => void playSegment(segment)}
+              onSaveCommit={(savedEdit) =>
+                commitLocalSegmentEdit(segment.id, savedEdit)
+              }
               onUnsavedChange={updateSegmentUnsaved}
               segment={segment}
               speakerLabels={speakerLabels}
@@ -470,6 +488,7 @@ type SegmentEditFormProps = {
     updater: (current: SegmentEdit | undefined) => SegmentEdit,
   ) => void;
   onPlay: () => void;
+  onSaveCommit: (savedEdit: SegmentEdit) => void;
   onUnsavedChange: (segmentId: string, isUnsaved: boolean) => void;
   playbackStatus: "preparing" | "playing" | null;
   segment: TranscriptSegment;
@@ -484,13 +503,13 @@ function SegmentEditForm({
   onJumpToPreview,
   onLocalEditChange,
   onPlay,
+  onSaveCommit,
   onUnsavedChange,
   playbackStatus,
   segment,
   speakerLabels,
   speakerNames,
 }: SegmentEditFormProps) {
-  const router = useRouter();
   const editedText = edit?.editedText ?? null;
   const speakerOverride = edit?.speakerOverride ?? null;
   const isSkipped = edit?.isSkipped || false;
@@ -510,8 +529,12 @@ function SegmentEditForm({
   const [pending, setPending] = useState(false);
   const [skipPending, setSkipPending] = useState(false);
   const [speakerPending, setSpeakerPending] = useState(false);
+  const [recentSaveStatus, setRecentSaveStatus] = useState<string | null>(null);
+  const editRequestIdRef = useRef(0);
+  const skipRequestIdRef = useRef(0);
   const speakerRequestIdRef = useRef(0);
   const committedSpeakerLabelRef = useRef(effectiveSpeakerLabel);
+  const recentSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [savedEditedText, setSavedEditedText] = useState<string | null>(
     editedText,
   );
@@ -527,6 +550,7 @@ function SegmentEditForm({
   const hasUnsavedChanges = textValue !== savedText;
   const isPlayingOrPreparing = playbackStatus !== null;
   const isPreparing = playbackStatus === "preparing";
+  const isSaving = pending || skipPending || speakerPending;
   const swipe = useSwipeSegmentAction({
     onSwipeLeft: onPlay,
     onSwipeRight: () => {
@@ -536,9 +560,29 @@ function SegmentEditForm({
     },
   });
 
+  useEffect(() => {
+    return () => {
+      if (recentSaveTimeoutRef.current) {
+        clearTimeout(recentSaveTimeoutRef.current);
+      }
+    };
+  }, []);
+
   function updateTextValue(nextText: string) {
     setTextValue(nextText);
     onUnsavedChange(segment.id, nextText !== savedText);
+  }
+
+  function markRecentlySaved(label: string) {
+    if (recentSaveTimeoutRef.current) {
+      clearTimeout(recentSaveTimeoutRef.current);
+    }
+
+    setRecentSaveStatus(label);
+    recentSaveTimeoutRef.current = setTimeout(() => {
+      setRecentSaveStatus(null);
+      recentSaveTimeoutRef.current = null;
+    }, 1400);
   }
 
   async function updateSpeakerValue(nextSpeakerLabel: string) {
@@ -548,10 +592,22 @@ function SegmentEditForm({
 
     const requestId = speakerRequestIdRef.current + 1;
     speakerRequestIdRef.current = requestId;
+    const clientStartedAt = performance.now();
+    const previousSpeakerLabel = speakerValue;
+    const previousEdit: SegmentEdit = {
+      editedText: savedEditedText,
+      speakerOverride: savedSpeakerOverride,
+      isSkipped: skippedValue,
+    };
 
+    debugSegmentSaveMetric("speaker:start", {
+      requestId,
+      segmentId: segment.id,
+    });
     setSpeakerValue(nextSpeakerLabel);
     setSpeakerPending(true);
     setSpeakerActionState({ error: null, success: false });
+    setRecentSaveStatus(null);
     onLocalEditChange((current) => ({
       editedText: current ? current.editedText : savedEditedText,
       speakerOverride:
@@ -567,6 +623,10 @@ function SegmentEditForm({
     const result = await saveSegmentSpeaker(formData);
 
     if (speakerRequestIdRef.current !== requestId) {
+      debugSegmentSaveMetric("speaker:stale-response", {
+        requestId,
+        segmentId: segment.id,
+      });
       return;
     }
 
@@ -577,22 +637,25 @@ function SegmentEditForm({
       const rollbackSpeakerLabel = committedSpeakerLabelRef.current;
 
       setSpeakerValue(rollbackSpeakerLabel);
-      onLocalEditChange((current) => ({
-        editedText: current ? current.editedText : savedEditedText,
-        speakerOverride:
-          rollbackSpeakerLabel !== segment.speakerLabel
-            ? rollbackSpeakerLabel
-            : null,
-        isSkipped: current ? current.isSkipped : skippedValue,
-      }));
+      onLocalEditChange(() => previousEdit);
+      debugSegmentSaveMetric("speaker:error", {
+        clientElapsedMs: Math.round(performance.now() - clientStartedAt),
+        requestId,
+        segmentId: segment.id,
+        serverMetrics: result.metrics,
+      });
       return;
     }
 
-    const nextSavedEditedText = result.savedEditedText ?? null;
-    const nextSavedSpeakerOverride = result.savedSpeakerOverride ?? null;
+    const nextSavedEditedText = savedEditedText;
+    const nextSavedSpeakerOverride =
+      result.savedSpeakerOverride === undefined
+        ? savedSpeakerOverride
+        : result.savedSpeakerOverride;
     const nextSavedSpeakerLabel =
       nextSavedSpeakerOverride ?? segment.speakerLabel;
-    const nextSavedSkipped = result.savedIsSkipped ?? skippedValue;
+    const nextSavedSkipped =
+      result.savedIsSkipped === undefined ? skippedValue : result.savedIsSkipped;
 
     committedSpeakerLabelRef.current = nextSavedSpeakerLabel;
     setSavedEditedText(nextSavedEditedText);
@@ -604,15 +667,40 @@ function SegmentEditForm({
       speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
     }));
-    router.refresh();
+    onSaveCommit({
+      editedText: nextSavedEditedText,
+      speakerOverride: nextSavedSpeakerOverride,
+      isSkipped: nextSavedSkipped,
+    });
+    markRecentlySaved("話者変更を保存しました。");
+    debugSegmentSaveMetric("speaker:done", {
+      clientElapsedMs: Math.round(performance.now() - clientStartedAt),
+      previousSpeakerLabel,
+      requestId,
+      segmentId: segment.id,
+      serverMetrics: result.metrics,
+    });
   }
 
   async function updateSkippedValue(nextSkipped: boolean) {
+    const requestId = skipRequestIdRef.current + 1;
+    skipRequestIdRef.current = requestId;
+    const clientStartedAt = performance.now();
     const previousSkipped = skippedValue;
+    const previousEdit: SegmentEdit = {
+      editedText: savedEditedText,
+      speakerOverride: savedSpeakerOverride,
+      isSkipped: previousSkipped,
+    };
 
+    debugSegmentSaveMetric("skip:start", {
+      requestId,
+      segmentId: segment.id,
+    });
     setSkippedValue(nextSkipped);
     setSkipPending(true);
     setSkipActionState({ error: null, success: false });
+    setRecentSaveStatus(null);
     onLocalEditChange((current) => ({
       editedText: current ? current.editedText : savedEditedText,
       speakerOverride: current ? current.speakerOverride : savedSpeakerOverride,
@@ -629,22 +717,33 @@ function SegmentEditForm({
       formData,
     );
 
+    if (skipRequestIdRef.current !== requestId) {
+      debugSegmentSaveMetric("skip:stale-response", {
+        requestId,
+        segmentId: segment.id,
+      });
+      return;
+    }
+
     setSkipPending(false);
     setSkipActionState(result);
 
     if (!result.success) {
       setSkippedValue(previousSkipped);
-      onLocalEditChange((current) => ({
-        editedText: current ? current.editedText : savedEditedText,
-        speakerOverride: current ? current.speakerOverride : savedSpeakerOverride,
-        isSkipped: previousSkipped,
-      }));
+      onLocalEditChange(() => previousEdit);
+      debugSegmentSaveMetric("skip:error", {
+        clientElapsedMs: Math.round(performance.now() - clientStartedAt),
+        requestId,
+        segmentId: segment.id,
+        serverMetrics: result.metrics,
+      });
       return;
     }
 
-    const nextSavedEditedText = result.savedEditedText ?? null;
-    const nextSavedSpeakerOverride = result.savedSpeakerOverride ?? null;
-    const nextSavedSkipped = result.savedIsSkipped ?? nextSkipped;
+    const nextSavedEditedText = savedEditedText;
+    const nextSavedSpeakerOverride = savedSpeakerOverride;
+    const nextSavedSkipped =
+      result.savedIsSkipped === undefined ? nextSkipped : result.savedIsSkipped;
     const nextSavedSpeakerLabel =
       nextSavedSpeakerOverride ?? segment.speakerLabel;
 
@@ -658,7 +757,18 @@ function SegmentEditForm({
       speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
     }));
-    router.refresh();
+    onSaveCommit({
+      editedText: nextSavedEditedText,
+      speakerOverride: nextSavedSpeakerOverride,
+      isSkipped: nextSavedSkipped,
+    });
+    markRecentlySaved("skip状態を保存しました。");
+    debugSegmentSaveMetric("skip:done", {
+      clientElapsedMs: Math.round(performance.now() - clientStartedAt),
+      requestId,
+      segmentId: segment.id,
+      serverMetrics: result.metrics,
+    });
   }
 
   async function submitSegmentEdit(event: FormEvent<HTMLFormElement>) {
@@ -671,22 +781,90 @@ function SegmentEditForm({
       submitter instanceof HTMLButtonElement ? submitter.value : "save";
 
     formData.set("intent", intent);
+    const requestId = editRequestIdRef.current + 1;
+    editRequestIdRef.current = requestId;
+    const clientStartedAt = performance.now();
+    const previousTextValue = textValue;
+    const previousSpeakerLabel = speakerValue;
+    const previousSkipped = skippedValue;
+    const previousSavedEditedText = savedEditedText;
+    const previousSavedSpeakerOverride = savedSpeakerOverride;
+    const previousEdit: SegmentEdit = {
+      editedText: previousSavedEditedText,
+      speakerOverride: previousSavedSpeakerOverride,
+      isSkipped: previousSkipped,
+    };
+    const optimisticEditedText =
+      intent === "reset" ? null : textValue.trim() ? textValue : null;
+    const optimisticSpeakerOverride =
+      intent === "reset"
+        ? null
+        : speakerValue !== segment.speakerLabel
+          ? speakerValue
+          : null;
+    const optimisticText = optimisticEditedText ?? segment.text;
+    const optimisticSpeakerLabel =
+      optimisticSpeakerOverride ?? segment.speakerLabel;
+
+    debugSegmentSaveMetric("text:start", {
+      intent,
+      requestId,
+      segmentId: segment.id,
+    });
     setPending(true);
+    setActionState({ error: null, success: false });
+    setRecentSaveStatus(null);
+    setSavedEditedText(optimisticEditedText);
+    setSavedSpeakerOverride(optimisticSpeakerOverride);
+    setTextValue(optimisticText);
+    setSpeakerValue(optimisticSpeakerLabel);
+    committedSpeakerLabelRef.current = optimisticSpeakerLabel;
+    onLocalEditChange(() => ({
+      editedText: optimisticEditedText,
+      speakerOverride: optimisticSpeakerOverride,
+      isSkipped: skippedValue,
+    }));
+    onUnsavedChange(segment.id, false);
 
     const result = await saveSegmentEdit(initialSegmentEditState, formData);
+
+    if (editRequestIdRef.current !== requestId) {
+      debugSegmentSaveMetric("text:stale-response", {
+        requestId,
+        segmentId: segment.id,
+      });
+      return;
+    }
 
     setActionState(result);
     setPending(false);
 
     if (!result.success) {
+      setTextValue(previousTextValue);
+      setSpeakerValue(previousSpeakerLabel);
+      setSkippedValue(previousSkipped);
+      setSavedEditedText(previousSavedEditedText);
+      setSavedSpeakerOverride(previousSavedSpeakerOverride);
+      committedSpeakerLabelRef.current = previousSpeakerLabel;
+      onLocalEditChange(() => previousEdit);
+      onUnsavedChange(segment.id, previousTextValue !== savedText);
+      debugSegmentSaveMetric("text:error", {
+        clientElapsedMs: Math.round(performance.now() - clientStartedAt),
+        requestId,
+        segmentId: segment.id,
+        serverMetrics: result.metrics,
+      });
       return;
     }
 
-    router.refresh();
-
-    const nextSavedEditedText = result.savedEditedText ?? null;
-    const nextSavedSpeakerOverride = result.savedSpeakerOverride ?? null;
-    const nextSavedSkipped = result.savedIsSkipped ?? skippedValue;
+    const nextSavedEditedText =
+      result.savedEditedText === undefined ? optimisticEditedText : result.savedEditedText;
+    const nextSavedSpeakerOverride =
+      result.savedSpeakerOverride === undefined
+        ? optimisticSpeakerOverride
+        : result.savedSpeakerOverride;
+    const nextSavedSkipped =
+      result.savedIsSkipped === undefined ? skippedValue : result.savedIsSkipped;
     const nextSavedText = nextSavedEditedText ?? segment.text;
     const nextSavedSpeakerLabel = nextSavedSpeakerOverride ?? segment.speakerLabel;
 
@@ -701,7 +879,20 @@ function SegmentEditForm({
       speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
     }));
+    onSaveCommit({
+      editedText: nextSavedEditedText,
+      speakerOverride: nextSavedSpeakerOverride,
+      isSkipped: nextSavedSkipped,
+    });
     onUnsavedChange(segment.id, false);
+    markRecentlySaved(intent === "reset" ? "元に戻しました。" : "本文編集を保存しました。");
+    debugSegmentSaveMetric("text:done", {
+      clientElapsedMs: Math.round(performance.now() - clientStartedAt),
+      intent,
+      requestId,
+      segmentId: segment.id,
+      serverMetrics: result.metrics,
+    });
   }
 
   return (
@@ -713,6 +904,8 @@ function SegmentEditForm({
       className={`rounded-md border p-4 transition ${
         hasUnsavedChanges
           ? "border-orange-300 bg-orange-50"
+          : isSaving
+          ? "border-sky-300 bg-sky-50"
           : isPlayingOrPreparing
           ? "border-emerald-300 bg-emerald-50"
           : isHighlighted
@@ -720,7 +913,7 @@ function SegmentEditForm({
           : skippedValue
           ? "border-zinc-200 bg-zinc-50"
           : "border-zinc-200 bg-white"
-      } ${skippedValue ? "opacity-60" : ""}`}
+      } ${skippedValue ? "opacity-60" : ""} ${isSaving ? "shadow-sm ring-1 ring-sky-200" : ""}`}
     >
       <input type="hidden" name="jobId" value={jobId} />
       <input type="hidden" name="segmentId" value={segment.id} />
@@ -771,6 +964,16 @@ function SegmentEditForm({
             {hasUnsavedChanges ? (
               <span className="rounded-md bg-orange-100 px-2 py-1 text-xs font-medium text-orange-800">
                 未保存
+              </span>
+            ) : null}
+            {isSaving ? (
+              <span className="rounded-md bg-sky-100 px-2 py-1 text-xs font-medium text-sky-800">
+                保存中
+              </span>
+            ) : null}
+            {recentSaveStatus ? (
+              <span className="rounded-md bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-800">
+                保存済み
               </span>
             ) : null}
             {skippedValue ? (
@@ -843,7 +1046,12 @@ function SegmentEditForm({
       ) : null}
       {actionState.success ? (
         <p className="mt-3 text-sm text-emerald-700" aria-live="polite">
-          本文編集を保存しました。
+          {recentSaveStatus || "本文編集を保存しました。"}
+        </p>
+      ) : null}
+      {recentSaveStatus && !actionState.success ? (
+        <p className="mt-3 text-sm text-emerald-700" aria-live="polite">
+          {recentSaveStatus}
         </p>
       ) : null}
       {skipPending ? (
@@ -1162,6 +1370,25 @@ function buildSafeFileName(fileName: string) {
 
 function getSegmentEditDomId(segmentId: string) {
   return `segment-edit-${segmentId}`;
+}
+
+function debugSegmentSaveMetric(
+  event: string,
+  payload: Record<string, unknown>,
+) {
+  const debugEnabled =
+    process.env.NODE_ENV !== "production" ||
+    (typeof window !== "undefined" &&
+      window.localStorage.getItem("debugSegmentSave") === "1");
+
+  if (!debugEnabled) {
+    return;
+  }
+
+  console.debug("[save-segment]", {
+    event,
+    ...payload,
+  });
 }
 
 function getSegmentPreviewDomId(segmentId: string) {

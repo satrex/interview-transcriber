@@ -51,26 +51,37 @@ export type ExpectedSpeakerCountActionState = {
 
 export type SegmentEditActionState = {
   error: string | null;
+  metrics?: SegmentSaveMetrics;
   savedEditedText?: string | null;
   savedSpeakerOverride?: string | null;
   savedIsSkipped?: boolean;
+  segmentId?: string;
   success: boolean;
 };
 
 export type SegmentSkipActionState = {
   error: string | null;
+  metrics?: SegmentSaveMetrics;
   savedEditedText?: string | null;
   savedSpeakerOverride?: string | null;
   savedIsSkipped?: boolean;
+  segmentId?: string;
   success: boolean;
 };
 
 export type SegmentSpeakerActionState = {
   error: string | null;
+  metrics?: SegmentSaveMetrics;
   savedEditedText?: string | null;
   savedSpeakerOverride?: string | null;
   savedIsSkipped?: boolean;
+  segmentId?: string;
   success: boolean;
+};
+
+export type SegmentSaveMetrics = {
+  dbElapsedMs: number;
+  serverElapsedMs: number;
 };
 
 export type DeleteJobActionState = {
@@ -956,6 +967,7 @@ export async function saveSegmentEdit(
   _previousState: SegmentEditActionState,
   formData: FormData,
 ): Promise<SegmentEditActionState> {
+  const actionStartedAt = Date.now();
   const jobId = getTextValue(formData, "jobId");
   const segmentId = getTextValue(formData, "segmentId");
   const editedText = getRawTextValue(formData, "editedText");
@@ -1002,6 +1014,10 @@ export async function saveSegmentEdit(
                 : null,
           };
 
+    debugSegmentSaveMetric("saveSegmentEdit:upsert:start", {
+      segmentId,
+    });
+    const dbStartedAt = Date.now();
     const { error: upsertError } = await supabase
       .from("transcription_segment_edits")
       .upsert(
@@ -1013,45 +1029,50 @@ export async function saveSegmentEdit(
         },
         { onConflict: "segment_id" },
       );
+    const dbElapsedMs = Date.now() - dbStartedAt;
+    debugSegmentSaveMetric("saveSegmentEdit:upsert:end", {
+      dbElapsedMs,
+      segmentId,
+    });
 
     if (upsertError) {
       return {
         error: `segment編集の保存に失敗しました: ${upsertError.message}`,
+        metrics: buildSegmentSaveMetrics(actionStartedAt, dbElapsedMs),
+        segmentId,
         success: false,
       };
     }
 
-    const { data: savedEdit, error: savedEditError } = await supabase
-      .from("transcription_segment_edits")
-      .select("edited_text, edited_speaker_label, is_skipped")
-      .eq("segment_id", segment.id)
-      .maybeSingle();
-
-    if (savedEditError || !savedEdit) {
-      return {
-        error: `segment編集の再読み込みに失敗しました: ${savedEditError?.message || "not found"}`,
-        success: false,
-      };
-    }
-
-    revalidatePath(`/jobs/${jobId}`);
+    const savedEditedText =
+      intent === "reset" ? null : editedText.trim() ? editedText : null;
+    const savedSpeakerOverride =
+      intent === "reset"
+        ? null
+        : editedSpeakerLabel && editedSpeakerLabel !== segment.speaker_label
+          ? editedSpeakerLabel
+          : null;
+    const metrics = buildSegmentSaveMetrics(actionStartedAt, dbElapsedMs);
+    debugSegmentSaveMetric("saveSegmentEdit:end", {
+      ...metrics,
+      segmentId,
+    });
     return {
       error: null,
-      savedEditedText:
-        typeof savedEdit.edited_text === "string" && savedEdit.edited_text.trim()
-          ? savedEdit.edited_text
-          : null,
-      savedSpeakerOverride:
-        typeof savedEdit.edited_speaker_label === "string" &&
-        savedEdit.edited_speaker_label.trim()
-          ? savedEdit.edited_speaker_label
-          : null,
-      savedIsSkipped: Boolean(savedEdit.is_skipped),
+      metrics,
+      savedEditedText,
+      savedSpeakerOverride,
+      segmentId,
       success: true,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
-    return { error: message, success: false };
+    return {
+      error: message,
+      metrics: buildSegmentSaveMetrics(actionStartedAt, 0),
+      segmentId,
+      success: false,
+    };
   }
 }
 
@@ -1059,6 +1080,7 @@ export async function saveSegmentSkip(
   _previousState: SegmentSkipActionState,
   formData: FormData,
 ): Promise<SegmentSkipActionState> {
+  const actionStartedAt = Date.now();
   const jobId = getTextValue(formData, "jobId");
   const segmentId = getTextValue(formData, "segmentId");
   const isSkipped = formData.get("isSkipped") === "true";
@@ -1089,6 +1111,10 @@ export async function saveSegmentSkip(
       return { error: "segmentが見つかりません。", success: false };
     }
 
+    debugSegmentSaveMetric("saveSegmentSkip:upsert:start", {
+      segmentId,
+    });
+    const dbStartedAt = Date.now();
     const { error: upsertError } = await supabase
       .from("transcription_segment_edits")
       .upsert(
@@ -1100,51 +1126,48 @@ export async function saveSegmentSkip(
         },
         { onConflict: "segment_id" },
       );
+    const dbElapsedMs = Date.now() - dbStartedAt;
+    debugSegmentSaveMetric("saveSegmentSkip:upsert:end", {
+      dbElapsedMs,
+      segmentId,
+    });
 
     if (upsertError) {
       return {
         error: `skip状態の保存に失敗しました: ${upsertError.message}`,
+        metrics: buildSegmentSaveMetrics(actionStartedAt, dbElapsedMs),
+        segmentId,
         success: false,
       };
     }
 
-    const { data: savedEdit, error: savedEditError } = await supabase
-      .from("transcription_segment_edits")
-      .select("edited_text, edited_speaker_label, is_skipped")
-      .eq("segment_id", segment.id)
-      .maybeSingle();
-
-    if (savedEditError || !savedEdit) {
-      return {
-        error: `skip状態の再読み込みに失敗しました: ${savedEditError?.message || "not found"}`,
-        success: false,
-      };
-    }
-
-    revalidatePath(`/jobs/${jobId}`);
+    const metrics = buildSegmentSaveMetrics(actionStartedAt, dbElapsedMs);
+    debugSegmentSaveMetric("saveSegmentSkip:end", {
+      ...metrics,
+      segmentId,
+    });
     return {
       error: null,
-      savedEditedText:
-        typeof savedEdit.edited_text === "string" && savedEdit.edited_text.trim()
-          ? savedEdit.edited_text
-          : null,
-      savedSpeakerOverride:
-        typeof savedEdit.edited_speaker_label === "string" &&
-        savedEdit.edited_speaker_label.trim()
-          ? savedEdit.edited_speaker_label
-          : null,
-      savedIsSkipped: Boolean(savedEdit.is_skipped),
+      metrics,
+      savedIsSkipped: isSkipped,
+      segmentId,
       success: true,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
-    return { error: message, success: false };
+    return {
+      error: message,
+      metrics: buildSegmentSaveMetrics(actionStartedAt, 0),
+      segmentId,
+      success: false,
+    };
   }
 }
 
 export async function saveSegmentSpeaker(
   formData: FormData,
 ): Promise<SegmentSpeakerActionState> {
+  const actionStartedAt = Date.now();
   const jobId = getTextValue(formData, "jobId");
   const segmentId = getTextValue(formData, "segmentId");
   const speakerLabel = getTextValue(formData, "speakerLabel");
@@ -1178,6 +1201,10 @@ export async function saveSegmentSpeaker(
       return { error: "segmentが見つかりません。", success: false };
     }
 
+    debugSegmentSaveMetric("saveSegmentSpeaker:upsert:start", {
+      segmentId,
+    });
+    const dbStartedAt = Date.now();
     const { error: upsertError } = await supabase
       .from("transcription_segment_edits")
       .upsert(
@@ -1190,45 +1217,43 @@ export async function saveSegmentSpeaker(
         },
         { onConflict: "segment_id" },
       );
+    const dbElapsedMs = Date.now() - dbStartedAt;
+    debugSegmentSaveMetric("saveSegmentSpeaker:upsert:end", {
+      dbElapsedMs,
+      segmentId,
+    });
 
     if (upsertError) {
       return {
         error: `話者変更の保存に失敗しました: ${upsertError.message}`,
+        metrics: buildSegmentSaveMetrics(actionStartedAt, dbElapsedMs),
+        segmentId,
         success: false,
       };
     }
 
-    const { data: savedEdit, error: savedEditError } = await supabase
-      .from("transcription_segment_edits")
-      .select("edited_text, edited_speaker_label, is_skipped")
-      .eq("segment_id", segment.id)
-      .maybeSingle();
-
-    if (savedEditError || !savedEdit) {
-      return {
-        error: `話者変更の再読み込みに失敗しました: ${savedEditError?.message || "not found"}`,
-        success: false,
-      };
-    }
-
-    revalidatePath(`/jobs/${jobId}`);
+    const savedSpeakerOverride =
+      speakerLabel !== segment.speaker_label ? speakerLabel : null;
+    const metrics = buildSegmentSaveMetrics(actionStartedAt, dbElapsedMs);
+    debugSegmentSaveMetric("saveSegmentSpeaker:end", {
+      ...metrics,
+      segmentId,
+    });
     return {
       error: null,
-      savedEditedText:
-        typeof savedEdit.edited_text === "string" && savedEdit.edited_text.trim()
-          ? savedEdit.edited_text
-          : null,
-      savedSpeakerOverride:
-        typeof savedEdit.edited_speaker_label === "string" &&
-        savedEdit.edited_speaker_label.trim()
-          ? savedEdit.edited_speaker_label
-          : null,
-      savedIsSkipped: Boolean(savedEdit.is_skipped),
+      metrics,
+      savedSpeakerOverride,
+      segmentId,
       success: true,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
-    return { error: message, success: false };
+    return {
+      error: message,
+      metrics: buildSegmentSaveMetrics(actionStartedAt, 0),
+      segmentId,
+      success: false,
+    };
   }
 }
 
@@ -1254,6 +1279,28 @@ async function getNextTermSortOrder(supabase: SupabaseClient, dictionaryId: stri
       : -1;
 
   return lastSortOrder + 1;
+}
+
+function buildSegmentSaveMetrics(
+  actionStartedAt: number,
+  dbElapsedMs: number,
+) {
+  return {
+    dbElapsedMs,
+    serverElapsedMs: Date.now() - actionStartedAt,
+  };
+}
+
+function debugSegmentSaveMetric(
+  event: string,
+  payload: Record<string, unknown>,
+) {
+  if (process.env.NODE_ENV !== "production" || process.env.DEBUG_SEGMENT_SAVE === "1") {
+    console.debug("[save-segment]", {
+      event,
+      ...payload,
+    });
+  }
 }
 
 function getRawTextValue(formData: FormData, key: string) {
