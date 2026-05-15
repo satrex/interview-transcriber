@@ -64,12 +64,24 @@ export function buildJobSourceStoragePath(jobId: string, originalFilename: strin
   return `jobs/${jobId}/source/${toSafeStorageFilename(originalFilename)}`;
 }
 
-export function buildUserJobSourceStoragePath(
+export function buildUserProjectSourceStoragePath(
   userId: string,
-  jobId: string,
+  projectId: string,
   originalFilename: string,
 ) {
-  return `${userId}/${jobId}/${toSafeStorageFilename(originalFilename)}`;
+  return `${userId}/projects/${projectId}/source/${toSafeStorageFilename(originalFilename)}`;
+}
+
+export function buildUserProjectPartStoragePath(
+  userId: string,
+  projectId: string,
+  partIndex: number,
+  originalFilename: string,
+) {
+  const extension = getFileExtension(originalFilename) || "m4a";
+  return `${userId}/projects/${projectId}/parts/part_${partIndex
+    .toString()
+    .padStart(3, "0")}.${extension}`;
 }
 
 export function buildJobAudioChunkStoragePath(

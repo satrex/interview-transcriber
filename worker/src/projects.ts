@@ -1,0 +1,349 @@
+import { rm, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { WorkerConfig } from "./config.js";
+import { probeAudio } from "./ffprobe.js";
+import { downloadJobAudio } from "./storage.js";
+import type { TranscriptionProject } from "./supabase.js";
+
+export class ProjectFailure extends Error {
+  readonly errorCode = "project_error";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectFailure";
+  }
+}
+
+export async function claimQueuedProject(
+  supabase: SupabaseClient,
+  workerId: string,
+  options: {
+    lockTimeoutMinutes: number;
+  },
+): Promise<TranscriptionProject | null> {
+  const lockTimeoutAt = new Date(Date.now() + options.lockTimeoutMinutes * 60 * 1000);
+
+  const { data, error } = await supabase.rpc("claim_queued_project", {
+    p_worker_id: workerId,
+    p_lock_timeout_at: lockTimeoutAt.toISOString(),
+  });
+
+  if (error) {
+    throw new Error(`Failed to claim queued project: ${error.message}`);
+  }
+
+  return data?.[0] || null;
+}
+
+export async function markProjectSplitting(
+  supabase: SupabaseClient,
+  project: TranscriptionProject,
+): Promise<void> {
+  const { error } = await supabase
+    .from("transcription_projects")
+    .update({
+      status: "splitting",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", project.id);
+
+  if (error) {
+    throw new Error(`Failed to mark project splitting: ${error.message}`);
+  }
+}
+
+export async function updateProjectWithParts(
+  supabase: SupabaseClient,
+  project: TranscriptionProject,
+  totalDurationSec: number,
+  totalParts: number,
+): Promise<void> {
+  const { error } = await supabase
+    .from("transcription_projects")
+    .update({
+      status: "processing_parts",
+      total_duration_sec: totalDurationSec,
+      total_parts: totalParts,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", project.id);
+
+  if (error) {
+    throw new Error(`Failed to update project with parts: ${error.message}`);
+  }
+}
+
+export async function markProjectCompleted(
+  supabase: SupabaseClient,
+  project: TranscriptionProject,
+): Promise<void> {
+  const { error } = await supabase
+    .from("transcription_projects")
+    .update({
+      status: "completed",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", project.id);
+
+  if (error) {
+    throw new Error(`Failed to mark project completed: ${error.message}`);
+  }
+}
+
+export async function markProjectFailed(
+  supabase: SupabaseClient,
+  project: TranscriptionProject,
+  errorMessage: string,
+  errorCode?: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from("transcription_projects")
+    .update({
+      status: "failed",
+      error_message: errorMessage,
+      error_code: errorCode,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", project.id);
+
+  if (error) {
+    throw new Error(`Failed to mark project failed: ${error.message}`);
+  }
+}
+
+export async function updateProjectProgress(
+  supabase: SupabaseClient,
+  projectId: string,
+): Promise<void> {
+  // Count completed and failed parts
+  const { data: counts, error } = await supabase
+    .from("transcription_jobs")
+    .select("status")
+    .eq("project_id", projectId)
+    .eq("is_project_part", true);
+
+  if (error) {
+    throw new Error(`Failed to count project parts: ${error.message}`);
+  }
+
+  const completedParts = counts.filter(job => job.status === "completed").length;
+  const failedParts = counts.filter(job => job.status === "failed").length;
+  const totalParts = counts.length;
+
+  let newStatus: string;
+  if (completedParts === totalParts && totalParts > 0) {
+    newStatus = "completed";
+  } else if (failedParts > 0) {
+    newStatus = "failed";
+  } else if (completedParts > 0 || counts.some(job => job.status === "processing")) {
+    newStatus = "processing_parts";
+  } else {
+    newStatus = "processing_parts"; // Still processing
+  }
+
+  const { error: updateError } = await supabase
+    .from("transcription_projects")
+    .update({
+      completed_parts: completedParts,
+      failed_parts: failedParts,
+      status: newStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", projectId);
+
+  if (updateError) {
+    throw new Error(`Failed to update project progress: ${updateError.message}`);
+  }
+}
+
+export async function createPartJobs(
+  supabase: SupabaseClient,
+  project: TranscriptionProject,
+  uploadedParts: Array<{
+    index: number;
+    startSec: number;
+    endSec: number;
+    storagePath: string;
+    audioDurationSec: number;
+    audioFileSizeBytes: number;
+    audioContentType: string;
+  }>,
+): Promise<void> {
+  const partJobs = uploadedParts.map((part) => ({
+    id: randomUUID(),
+    user_id: project.user_id,
+    original_filename: project.original_filename,
+    storage_bucket: project.storage_bucket,
+    storage_path: part.storagePath,
+    audio_duration_sec: part.audioDurationSec,
+    audio_file_size_bytes: part.audioFileSizeBytes,
+    audio_content_type: part.audioContentType,
+    status: "queued",
+    progress: 0,
+    term_dictionary_id: null,
+    skipped_segments_count: 0,
+    attempt_count: 0,
+    worker_id: null,
+    locked_at: null,
+    project_id: project.id,
+    part_index: part.index,
+    part_start_sec: part.startSec,
+    part_end_sec: part.endSec,
+    is_project_part: true,
+  }));
+
+  const { error } = await supabase.from("transcription_jobs").insert(partJobs);
+
+  if (error) {
+    throw new Error(`Failed to create project part jobs: ${error.message}`);
+  }
+}
+
+export async function processProject(
+  supabase: SupabaseClient,
+  config: WorkerConfig,
+  project: TranscriptionProject,
+) {
+  let projectTmpDir: string | null = null;
+
+  try {
+    console.log(`[worker] processing project ${project.id}: ${project.title}`);
+
+    await markProjectSplitting(supabase, project);
+
+    console.log(`[worker] downloading project source ${project.id}: ${project.storage_path}`);
+    const downloaded = await downloadJobAudio(supabase, project, config.tmpDir);
+    projectTmpDir = downloaded.jobTmpDir;
+
+    console.log(
+      `[worker] downloaded ${downloaded.bytes} bytes to ${downloaded.localPath}`,
+    );
+
+    const audioInfo = await probeAudio(config.ffprobePath, downloaded.localPath);
+    const totalDurationSec = audioInfo.durationSec;
+
+    if (totalDurationSec === null) {
+      throw new Error(`Could not determine duration for project ${project.id}`);
+    }
+
+    console.log("[worker] ffprobe audio info:");
+    console.log(JSON.stringify(audioInfo, null, 2));
+
+    const partDurationSec = project.part_duration_sec;
+    const totalParts = Math.ceil(totalDurationSec / partDurationSec);
+
+    console.log(`[worker] splitting into ${totalParts} parts of ${partDurationSec}s each`);
+
+    const parts: Array<{
+      index: number;
+      startSec: number;
+      endSec: number;
+      localPath: string;
+    }> = [];
+
+    for (let i = 0; i < totalParts; i++) {
+      const startSec = i * partDurationSec;
+      const endSec = Math.min((i + 1) * partDurationSec, totalDurationSec);
+      const duration = endSec - startSec;
+
+      const partFilename = `part_${i.toString().padStart(3, "0")}.m4a`;
+      const partLocalPath = `${downloaded.jobTmpDir}/parts/${partFilename}`;
+
+      console.log(`[worker] creating part ${i}: ${startSec}s - ${endSec}s (${duration}s)`);
+
+      // Use ffmpeg to extract part
+      const { spawn } = await import("node:child_process");
+      const ffmpeg = spawn(config.ffmpegPath, [
+        "-i", downloaded.localPath,
+        "-ss", startSec.toString(),
+        "-t", duration.toString(),
+        "-c", "copy", // Copy streams without re-encoding for speed
+        "-avoid_negative_ts", "make_zero",
+        partLocalPath,
+      ], { stdio: "inherit" });
+
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg.on("close", (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`ffmpeg exited with code ${code}`));
+          }
+        });
+        ffmpeg.on("error", reject);
+      });
+
+      parts.push({
+        index: i,
+        startSec,
+        endSec,
+        localPath: partLocalPath,
+      });
+    }
+
+    // Upload parts to storage
+    const uploadedParts: Array<{
+      index: number;
+      startSec: number;
+      endSec: number;
+      storagePath: string;
+      audioDurationSec: number;
+      audioFileSizeBytes: number;
+      audioContentType: string;
+    }> = [];
+
+    for (const part of parts) {
+      const partInfo = await probeAudio(config.ffprobePath, part.localPath);
+      const storagePath = `${project.user_id}/projects/${project.id}/parts/part_${part.index.toString().padStart(3, "0")}.m4a`;
+
+      if (partInfo.durationSec === null) {
+        throw new Error(`Could not determine duration for project part ${part.index}`);
+      }
+
+      console.log(`[worker] uploading part ${part.index} to ${storagePath}`);
+
+      const { data, error } = await supabase.storage
+        .from(project.storage_bucket)
+        .upload(storagePath, part.localPath, {
+          contentType: "audio/mp4",
+          upsert: true,
+        });
+
+      if (error) {
+        throw new Error(`Failed to upload part ${part.index}: ${error.message}`);
+      }
+
+      const fileStats = await stat(part.localPath);
+
+      uploadedParts.push({
+        index: part.index,
+        startSec: part.startSec,
+        endSec: part.endSec,
+        storagePath,
+        audioDurationSec: partInfo.durationSec,
+        audioFileSizeBytes: fileStats.size,
+        audioContentType: "audio/mp4",
+      });
+    }
+
+    await updateProjectWithParts(supabase, project, totalDurationSec, totalParts);
+    await createPartJobs(supabase, project, uploadedParts);
+
+    console.log(`[worker] project ${project.id} split into ${totalParts} parts`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[worker] project ${project.id} failed:`, message);
+    await markProjectFailed(supabase, project, message);
+    throw error;
+  } finally {
+    if (projectTmpDir) {
+      try {
+        await rm(projectTmpDir, { recursive: true, force: true });
+        console.log(`[worker] cleaned up project tmp dir: ${projectTmpDir}`);
+      } catch (cleanupError) {
+        console.warn(`[worker] failed to cleanup project tmp dir: ${projectTmpDir}`, cleanupError);
+      }
+    }
+  }
+}

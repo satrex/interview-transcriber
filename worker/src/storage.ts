@@ -5,12 +5,17 @@ import { retryTransientOperation } from "./retry.js";
 import type { TranscriptionJob } from "./supabase.js";
 import type { AudioChunk } from "./ffmpeg.js";
 
+export type StorageDownloadable = {
+  id: string;
+  storage_path: string;
+};
+
 const SOURCE_AUDIO_SIGNED_URL_EXPIRES_IN_SECONDS = 60 * 60;
 const AUDIO_BUCKET = "audio";
 
 export async function downloadJobAudio(
   supabase: SupabaseClient,
-  job: TranscriptionJob,
+  job: TranscriptionJob | StorageDownloadable,
   tmpDir: string,
 ) {
   const jobTmpDir = join(tmpDir, job.id);
@@ -43,7 +48,7 @@ export async function downloadJobAudio(
 
 async function createSourceAudioSignedUrl(
   supabase: SupabaseClient,
-  job: TranscriptionJob,
+  job: TranscriptionJob | StorageDownloadable,
 ) {
   const { data, error } = await retryTransientOperation(
     { operation: `create signed source audio URL for job ${job.id}` },

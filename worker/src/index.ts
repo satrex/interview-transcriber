@@ -1,9 +1,10 @@
 import { loadConfig } from "./config.js";
 import { claimQueuedJob, markJobAttemptFailed } from "./jobs.js";
+import { processProject, claimQueuedProject, updateProjectProgress } from "./projects.js";
 import { FinalJobFailure, PermanentJobFailure, processJob } from "./processor.js";
 import { isTransientError } from "./retry.js";
 import { createSupabaseClient } from "./supabase.js";
-import type { TranscriptionJob } from "./supabase.js";
+import type { TranscriptionJob, TranscriptionProject } from "./supabase.js";
 
 const NO_JOB_LOG_INTERVAL_MS = 60_000;
 const ERROR_SLEEP_MS = 5_000;
@@ -33,6 +34,25 @@ async function main() {
 
   while (!shutdownState.shuttingDown) {
     try {
+      // First, try to claim a queued project
+      const project = await claimQueuedProject(supabase, config.workerId, {
+        lockTimeoutMinutes: config.lockTimeoutMinutes,
+      });
+
+      if (project) {
+        if (shutdownState.shuttingDown) {
+          console.log(
+            `[worker] claimed project ${project.id} during shutdown; current project will finish before shutdown`,
+          );
+        }
+
+        shutdownState.activeJobId = `project-${project.id}`;
+        await processClaimedProject(supabase, config, project, shutdownState);
+        shutdownState.activeJobId = null;
+        continue;
+      }
+
+      // If no project, try to claim a queued job
       const job = await claimQueuedJob(supabase, config.workerId, {
         lockTimeoutMinutes: config.lockTimeoutMinutes,
         maxAttempts: config.maxAttempts,
@@ -46,7 +66,7 @@ async function main() {
         const now = Date.now();
 
         if (now - lastNoJobLogAt >= NO_JOB_LOG_INTERVAL_MS) {
-          console.log("[worker] no claimable jobs found");
+          console.log("[worker] no claimable jobs or projects found");
           lastNoJobLogAt = now;
         }
 
@@ -60,7 +80,9 @@ async function main() {
         );
       }
 
+      shutdownState.activeJobId = job.id;
       await processClaimedJob(supabase, config, job, shutdownState);
+      shutdownState.activeJobId = null;
     } catch (error) {
       console.error("[worker] loop error:", error);
 
@@ -159,6 +181,27 @@ async function processClaimedJob(
           ? error.processedAudioSeconds
           : undefined,
     });
+
+    // Update project progress if this is a project part
+    if (job.project_id && job.is_project_part) {
+      await updateProjectProgress(supabase, job.project_id);
+    }
+  } finally {
+    shutdownState.activeJobId = null;
+  }
+}
+
+async function processClaimedProject(
+  supabase: ReturnType<typeof createSupabaseClient>,
+  config: ReturnType<typeof loadConfig>,
+  project: TranscriptionProject,
+  shutdownState: ShutdownState,
+) {
+  try {
+    await processProject(supabase, config, project);
+  } catch (error) {
+    console.error(`[worker] project ${project.id} processing failed:`, error);
+    // Project failure is already handled in processProject
   } finally {
     shutdownState.activeJobId = null;
   }

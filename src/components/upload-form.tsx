@@ -8,12 +8,12 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import {
-  createJobAction,
+  createProjectAction,
 } from "@/app/actions";
 import { createBrowserSupabaseClient } from "@/lib/supabase/browser";
 import {
   AUDIO_BUCKET,
-  buildUserJobSourceStoragePath,
+  buildUserProjectSourceStoragePath,
   getAudioContentType,
 } from "@/lib/storage";
 
@@ -145,10 +145,10 @@ export function UploadForm({
         return;
       }
 
-      const jobId = crypto.randomUUID();
-      const storagePath = buildUserJobSourceStoragePath(
+      const projectId = crypto.randomUUID();
+      const storagePath = buildUserProjectSourceStoragePath(
         user.id,
-        jobId,
+        projectId,
         uploadFile.name,
       );
       const firstPathSegment = storagePath.split("/")[0];
@@ -177,8 +177,8 @@ export function UploadForm({
         return;
       }
 
-      const result = await createJobAction({
-        jobId,
+      const result = await createProjectAction({
+        projectId,
         storagePath,
         fileName: uploadFile.name,
         fileSize: uploadFile.size,
@@ -187,12 +187,12 @@ export function UploadForm({
         termDictionaryId: termDictionaryId || null,
       });
 
-      if (result.error || !result.jobId) {
+      if (result.error || !result.projectId) {
         setJobCreateError(result.error || "不明なエラーが発生しました。");
         return;
       }
 
-      router.push(`/jobs/${result.jobId}`);
+      router.push(`/projects/${result.projectId}`);
       router.refresh();
     } catch (error) {
       const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";

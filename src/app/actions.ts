@@ -15,8 +15,8 @@ import {
   parseDictionaryYaml,
 } from "@/lib/term-dictionaries";
 
-export type CreateJobActionInput = {
-  jobId: string;
+export type CreateProjectActionInput = {
+  projectId: string;
   storagePath: string;
   fileName: string;
   fileSize: number;
@@ -25,9 +25,9 @@ export type CreateJobActionInput = {
   termDictionaryId?: string | null;
 };
 
-export type CreateJobActionState = {
+export type CreateProjectActionState = {
   error: string | null;
-  jobId?: string;
+  projectId?: string;
 };
 
 export type LoginActionState = {
@@ -99,6 +99,12 @@ export type TermDictionaryActionState = {
   success: boolean;
 };
 
+export type ExportProjectActionState = {
+  error: string | null;
+  markdown?: string;
+  incompleteParts?: number;
+};
+
 export async function loginWithPassword(
   _previousState: LoginActionState,
   formData: FormData,
@@ -137,8 +143,8 @@ export async function logout() {
 }
 
 export async function createJobAction(
-  input: CreateJobActionInput,
-): Promise<CreateJobActionState> {
+  input: CreateProjectActionInput,
+): Promise<CreateProjectActionState> {
   const validationError = validateAudioFileMetadata({
     fileName: input.fileName,
     fileSize: input.fileSize,
@@ -149,8 +155,8 @@ export async function createJobAction(
     return { error: validationError };
   }
 
-  if (!isUuid(input.jobId)) {
-    return { error: "ジョブIDが不正です。" };
+  if (!isUuid(input.projectId)) {
+    return { error: "プロジェクトIDが不正です。" };
   }
 
   if (!input.storagePath) {
@@ -173,7 +179,7 @@ export async function createJobAction(
       return { error: "ログインが必要です。" };
     }
 
-    const expectedPathPrefix = `${user.id}/${input.jobId}/`;
+    const expectedPathPrefix = `${user.id}/${input.projectId}/`;
 
     if (!input.storagePath.startsWith(expectedPathPrefix)) {
       return { error: "Storage path がログインユーザーの領域ではありません。" };
@@ -228,7 +234,7 @@ export async function createJobAction(
     const { error: insertError } = await adminSupabase
       .from("transcription_jobs")
       .insert({
-        id: input.jobId,
+        id: input.projectId,
         user_id: user.id,
         original_filename: input.fileName,
         storage_bucket: bucketName,
@@ -252,7 +258,126 @@ export async function createJobAction(
 
   revalidatePath("/");
   revalidatePath("/jobs");
-  return { error: null, jobId: input.jobId };
+  return { error: null, projectId: input.projectId };
+}
+
+export async function createProjectAction(
+  input: CreateProjectActionInput,
+): Promise<CreateProjectActionState> {
+  const validationError = validateAudioFileMetadata({
+    fileName: input.fileName,
+    fileSize: input.fileSize,
+    contentType: input.contentType,
+  });
+
+  if (validationError) {
+    return { error: validationError };
+  }
+
+  if (!isUuid(input.projectId)) {
+    return { error: "プロジェクトIDが不正です。" };
+  }
+
+  if (!input.storagePath) {
+    return { error: "Storage path が指定されていません。" };
+  }
+
+  const durationSec =
+    typeof input.durationSec === "number" && Number.isFinite(input.durationSec)
+      ? input.durationSec
+      : null;
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。" };
+    }
+
+    const expectedPathPrefix = `${user.id}/projects/${input.projectId}/source/`;
+
+    if (!input.storagePath.startsWith(expectedPathPrefix)) {
+      return { error: "Storage path がログインユーザーの領域ではありません。" };
+    }
+
+    const termDictionaryId =
+      input.termDictionaryId && isUuid(input.termDictionaryId)
+        ? input.termDictionaryId
+        : null;
+
+    if (input.termDictionaryId && !termDictionaryId) {
+      return { error: "用語辞書IDが不正です。" };
+    }
+
+    if (termDictionaryId) {
+      const { data: dictionary, error: dictionaryError } = await supabase
+        .from("term_dictionaries")
+        .select("id")
+        .eq("id", termDictionaryId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (dictionaryError || !dictionary) {
+        return { error: "指定された用語辞書が見つからないか、使用権限がありません。" };
+      }
+    }
+
+    const adminSupabase = createAdminSupabaseClient();
+    const bucketName = getAudioBucketName();
+    const object = splitStoragePath(input.storagePath);
+    const { data: uploadedObjects, error: listError } = await adminSupabase.storage
+      .from(bucketName)
+      .list(object.directory, {
+        limit: 1,
+        search: object.filename,
+      });
+
+    if (listError) {
+      return {
+        error: `アップロード済み音声ファイルの確認に失敗しました: ${listError.message}`,
+      };
+    }
+
+    const uploadedObject = uploadedObjects?.find(
+      (item) => item.name === object.filename,
+    );
+
+    if (!uploadedObject) {
+      return { error: "アップロード済み音声ファイルがStorageに見つかりません。" };
+    }
+
+    const title = input.fileName.replace(/\.[^/.]+$/, ""); // Remove extension
+
+    const { error: insertError } = await adminSupabase
+      .from("transcription_projects")
+      .insert({
+        id: input.projectId,
+        user_id: user.id,
+        title,
+        original_filename: input.fileName,
+        storage_bucket: bucketName,
+        storage_path: input.storagePath,
+        total_duration_sec: durationSec,
+        part_duration_sec: 1800, // 30 minutes
+        status: "queued",
+      });
+
+    if (insertError) {
+      await adminSupabase.storage.from(bucketName).remove([input.storagePath]);
+      return { error: `文字起こしプロジェクトの作成に失敗しました: ${insertError.message}` };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message };
+  }
+
+  revalidatePath("/");
+  revalidatePath("/projects");
+  return { error: null, projectId: input.projectId };
 }
 
 export async function deleteTranscriptionJob(
@@ -1260,6 +1385,144 @@ export async function saveSegmentSpeaker(
 function getTextValue(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
+}
+
+export async function exportProjectDirectly(
+  formData: FormData,
+): Promise<void> {
+  const projectId = getTextValue(formData, "projectId");
+
+  if (!projectId) {
+    throw new Error("プロジェクトIDが指定されていません。");
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      throw new Error("ログインが必要です。");
+    }
+
+    // Get project info
+    const { data: project, error: projectError } = await supabase
+      .from("transcription_projects")
+      .select("id, title, total_parts, completed_parts")
+      .eq("id", projectId)
+      .eq("user_id", user.id)
+      .single();
+
+    if (projectError || !project) {
+      throw new Error("プロジェクトが見つかりません。");
+    }
+
+    if (project.completed_parts < project.total_parts) {
+      throw new Error(
+        `すべてのパートが完了していません。完了していないパート: ${project.total_parts - project.completed_parts}個`,
+      );
+    }
+
+    // Get completed part jobs
+    const { data: partJobs, error: jobsError } = await supabase
+      .from("transcription_jobs")
+      .select("id, part_index, part_start_sec, part_end_sec")
+      .eq("project_id", projectId)
+      .eq("is_project_part", true)
+      .eq("status", "completed")
+      .order("part_index");
+
+    if (jobsError) {
+      throw new Error("パートジョブの取得に失敗しました。");
+    }
+
+    // Generate markdown for each part
+    const partsMarkdown: string[] = [];
+
+    for (const job of partJobs) {
+      const transcript = await generateTranscriptMarkdown(supabase, job.id, user.id);
+      const startTime = formatTime(job.part_start_sec);
+      const endTime = formatTime(job.part_end_sec);
+
+      partsMarkdown.push(`## Part ${job.part_index + 1}: ${startTime} - ${endTime}\n\n${transcript}\n`);
+    }
+
+    const fullMarkdown = `# ${project.title}\n\n${partsMarkdown.join("\n")}`;
+
+    console.log("Project exported successfully");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    console.error("Export error:", message);
+    throw error;
+  }
+}
+
+function formatTime(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+}
+
+async function generateTranscriptMarkdown(
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>,
+  jobId: string,
+  userId: string,
+): Promise<string> {
+  // Reuse existing transcript generation logic
+  
+  const { data: segments, error: segmentsError } = await supabase
+    .from("transcription_segments")
+    .select("*")
+    .eq("job_id", jobId)
+    .order("segment_index", { ascending: true });
+
+  if (segmentsError || !segments) {
+    return "";
+  }
+
+  const { data: edits, error: editsError } = await supabase
+    .from("segment_edits")
+    .select("*")
+    .eq("job_id", jobId);
+
+  if (editsError) {
+    // Edits table might not have entries, so we continue without it
+  }
+
+  // Apply edits to segments
+  const editedSegments = segments.map((segment) => {
+    const edit = edits?.find((e) => e.segment_id === segment.id);
+    return {
+      ...segment,
+      edited_text: edit?.edited_text || segment.text,
+      speaker_override: edit?.speaker_override,
+      is_skipped: edit?.is_skipped || false,
+    };
+  });
+
+  // Filter out skipped segments and generate markdown
+  const transcriptLines: string[] = [];
+  let currentSpeaker: string | null = null;
+
+  for (const segment of editedSegments) {
+    if (segment.is_skipped) continue;
+
+    const speaker = segment.speaker_override || segment.speaker_label;
+    if (speaker !== currentSpeaker) {
+      if (currentSpeaker !== null) {
+        transcriptLines.push("");
+      }
+      transcriptLines.push(`**${speaker}:**`);
+      currentSpeaker = speaker;
+    }
+
+    transcriptLines.push(segment.edited_text);
+  }
+
+  return transcriptLines.join("\n");
 }
 
 async function getNextTermSortOrder(supabase: SupabaseClient, dictionaryId: string) {

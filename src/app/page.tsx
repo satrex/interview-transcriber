@@ -40,14 +40,22 @@ export default async function Home() {
                     アップロード後、queued 状態の文字起こしジョブを作成します。
                   </p>
                 </div>
-                <form action={logout}>
-                  <button
-                    type="submit"
+                <div className="flex gap-3">
+                  <Link
+                    href="/projects"
                     className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
                   >
-                    ログアウト
-                  </button>
-                </form>
+                    プロジェクト一覧
+                  </Link>
+                  <form action={logout}>
+                    <button
+                      type="submit"
+                      className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+                    >
+                      ログアウト
+                    </button>
+                  </form>
+                </div>
               </div>
 
               <div className="mt-5 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">

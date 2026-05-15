@@ -15,6 +15,7 @@ import { clearJobSegments, saveSegments } from "./segments.js";
 import { downloadJobAudio, uploadJobAudioChunks } from "./storage.js";
 import type { TranscriptionJob } from "./supabase.js";
 import { loadTermDictionaryPrompt } from "./term-dictionaries.js";
+import { updateProjectProgress } from "./projects.js";
 import {
   createOpenAIClient,
   OpenAITranscriptionError,
@@ -201,6 +202,11 @@ export async function processJob(
     console.log(
       `[worker] completed job ${job.id}; saved ${totalSavedSegmentsCount} segment(s), skipped ${totalSkippedSegmentsCount} empty segment(s)`,
     );
+
+    // Update project progress if this is a project part
+    if (job.project_id && job.is_project_part) {
+      await updateProjectProgress(supabase, job.project_id);
+    }
   } catch (error) {
     if (error instanceof OpenAITranscriptionError) {
       throw new FinalJobFailure(error.message, {
