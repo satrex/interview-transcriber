@@ -1,4 +1,5 @@
-import { rm, stat } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { WorkerConfig } from "./config.js";
@@ -215,6 +216,9 @@ export async function processProject(
     console.log(`[worker] downloading project source ${project.id}: ${project.storage_path}`);
     const downloaded = await downloadJobAudio(supabase, project, config.tmpDir);
     projectTmpDir = downloaded.jobTmpDir;
+    const partsDir = path.join(projectTmpDir, "parts");
+
+    await mkdir(partsDir, { recursive: true });
 
     console.log(
       `[worker] downloaded ${downloaded.bytes} bytes to ${downloaded.localPath}`,
@@ -248,7 +252,9 @@ export async function processProject(
       const duration = endSec - startSec;
 
       const partFilename = `part_${i.toString().padStart(3, "0")}.m4a`;
-      const partLocalPath = `${downloaded.jobTmpDir}/parts/${partFilename}`;
+      const partLocalPath = path.join(partsDir, partFilename);
+
+      await mkdir(partsDir, { recursive: true });
 
       console.log(`[worker] creating part ${i}: ${startSec}s - ${endSec}s (${duration}s)`);
 
@@ -268,10 +274,19 @@ export async function processProject(
           if (code === 0) {
             resolve();
           } else {
+            console.error(
+              `[worker] ffmpeg failed for project ${project.id}: partIndex=${i}, partStartSec=${startSec}, partDurationSec=${duration}, inputPath=${downloaded.localPath}, outputPath=${partLocalPath}, outputDir=${partsDir}`,
+            );
             reject(new Error(`ffmpeg exited with code ${code}`));
           }
         });
-        ffmpeg.on("error", reject);
+        ffmpeg.on("error", (spawnError) => {
+          console.error(
+            `[worker] ffmpeg spawn error for project ${project.id}: partIndex=${i}, partStartSec=${startSec}, partDurationSec=${duration}, inputPath=${downloaded.localPath}, outputPath=${partLocalPath}, outputDir=${partsDir}`,
+            spawnError,
+          );
+          reject(spawnError);
+        });
       });
 
       parts.push({
