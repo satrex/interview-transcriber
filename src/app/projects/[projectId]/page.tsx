@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { JobAutoRefresh } from "@/components/job-auto-refresh";
+import ProjectStatusPanel from "@/components/project-status-panel";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { exportProjectDirectly } from "@/app/actions";
 
@@ -110,52 +111,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
         </div>
       </div>
 
-      {hasActiveJobs ? <JobAutoRefresh status="processing" /> : null}
-
-      <section className="mt-8 overflow-hidden rounded-md border border-zinc-200 bg-white shadow-sm">
-        <div className="border-b border-zinc-200 px-6 py-4">
-          <h2 className="text-lg font-semibold text-zinc-950">パート一覧</h2>
-        </div>
-        <div className="divide-y divide-zinc-200">
-          {partJobs.length === 0 ? (
-            <div className="p-8 text-center text-zinc-600">
-              パートジョブがまだ作成されていません。
-            </div>
-          ) : (
-            partJobs
-              .sort((a, b) => a.part_index - b.part_index)
-              .map((job) => (
-                <div key={job.id} className="p-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-lg font-medium text-zinc-950">
-                        Part {job.part_index + 1}: {formatTime(job.part_start_sec)} - {formatTime(job.part_end_sec)}
-                      </h3>
-                      <p className="mt-1 text-sm text-zinc-600">
-                        ステータス: {job.status} | 進捗: {job.progress}%
-                      </p>
-                      {job.status === "failed" && job.error_message && (
-                        <p className="mt-1 text-sm text-red-600">
-                          エラー: {job.error_message}
-                        </p>
-                      )}
-                    </div>
-                    <div>
-                      {job.status === "completed" && (
-                        <Link
-                          href={`/jobs/${job.id}`}
-                          className="inline-flex min-h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800"
-                        >
-                          編集する
-                        </Link>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))
-          )}
-        </div>
-      </section>
+      <ProjectStatusPanel project={project} parts={partJobs} projectId={project.id} />
 
       {/* Export Section */}
       <section className="mt-8 overflow-hidden rounded-md border border-zinc-200 bg-white shadow-sm">
