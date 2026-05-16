@@ -1,4 +1,4 @@
-import { mkdir, rm, stat } from "node:fs/promises";
+import { mkdir, rm, stat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -207,6 +207,7 @@ export async function processProject(
   project: TranscriptionProject,
 ) {
   let projectTmpDir: string | null = null;
+  const MIN_VALID_AUDIO_BYTES = 100 * 1024; // 100KB
 
   try {
     console.log(`[worker] processing project ${project.id}: ${project.title}`);
@@ -258,16 +259,34 @@ export async function processProject(
 
       console.log(`[worker] creating part ${i}: ${startSec}s - ${endSec}s (${duration}s)`);
 
-      // Use ffmpeg to extract part
+      // Use ffmpeg to extract part (re-encode to avoid corrupted m4a)
       const { spawn } = await import("node:child_process");
-      const ffmpeg = spawn(config.ffmpegPath, [
-        "-i", downloaded.localPath,
-        "-ss", startSec.toString(),
-        "-t", duration.toString(),
-        "-c", "copy", // Copy streams without re-encoding for speed
-        "-avoid_negative_ts", "make_zero",
+      const ffmpegArgs = [
+        "-y",
+        "-ss",
+        startSec.toString(),
+        "-i",
+        downloaded.localPath,
+        "-t",
+        duration.toString(),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "64k",
         partLocalPath,
-      ], { stdio: "inherit" });
+      ];
+
+      const ffmpeg = spawn(config.ffmpegPath, ffmpegArgs, { stdio: ["ignore", "ignore", "pipe"] });
+
+      let ffmpegStderr = "";
+      ffmpeg.stderr?.on("data", (chunk) => {
+        ffmpegStderr += String(chunk);
+      });
 
       await new Promise<void>((resolve, reject) => {
         ffmpeg.on("close", (code) => {
@@ -275,8 +294,11 @@ export async function processProject(
             resolve();
           } else {
             console.error(
-              `[worker] ffmpeg failed for project ${project.id}: partIndex=${i}, partStartSec=${startSec}, partDurationSec=${duration}, inputPath=${downloaded.localPath}, outputPath=${partLocalPath}, outputDir=${partsDir}`,
+              `[worker] ffmpeg failed for project ${project.id}: partIndex=${i}, partStartSec=${startSec}, partDurationSec=${duration}, inputPath=${downloaded.localPath}, outputPath=${partLocalPath}, outputDir=${partsDir}, code=${code}`,
             );
+            if (ffmpegStderr) {
+              console.error(`[worker] ffmpeg stderr:\n${ffmpegStderr}`);
+            }
             reject(new Error(`ffmpeg exited with code ${code}`));
           }
         });
@@ -285,6 +307,9 @@ export async function processProject(
             `[worker] ffmpeg spawn error for project ${project.id}: partIndex=${i}, partStartSec=${startSec}, partDurationSec=${duration}, inputPath=${downloaded.localPath}, outputPath=${partLocalPath}, outputDir=${partsDir}`,
             spawnError,
           );
+          if (ffmpegStderr) {
+            console.error(`[worker] ffmpeg stderr:\n${ffmpegStderr}`);
+          }
           reject(spawnError);
         });
       });
@@ -297,6 +322,34 @@ export async function processProject(
       });
     }
 
+    // Validate generated parts before uploading
+    console.log(`[worker] validating ${parts.length} generated parts for project ${project.id}`);
+    for (const part of parts) {
+      try {
+        const fileStats = await stat(part.localPath);
+        if (!fileStats.isFile() || fileStats.size < MIN_VALID_AUDIO_BYTES) {
+          throw new Error(`Generated part file is too small: ${part.localPath} (${fileStats.size} bytes)`);
+        }
+
+        const partInfo = await probeAudio(config.ffprobePath, part.localPath);
+        if (partInfo.durationSec === null || partInfo.durationSec <= 0) {
+          throw new Error(`ffprobe could not determine duration for part ${part.index}: ${part.localPath}`);
+        }
+        if (!partInfo.streams.some((s) => s.codecType === "audio")) {
+          throw new Error(`No audio stream found for part ${part.index}: ${part.localPath}`);
+        }
+
+        console.log(
+          `[worker] validated part ${part.index}: path=${part.localPath}, size=${fileStats.size} bytes, duration=${partInfo.durationSec}s`,
+        );
+      } catch (validationError) {
+        const msg = validationError instanceof Error ? validationError.message : String(validationError);
+        console.error(`[worker] project ${project.id} split validation failed: ${msg}`);
+        await markProjectFailed(supabase, project, msg, "project_split_invalid_part_file");
+        throw new ProjectFailure(msg);
+      }
+    }
+
     // Upload parts to storage
     const uploadedParts: Array<{
       index: number;
@@ -307,36 +360,37 @@ export async function processProject(
       audioFileSizeBytes: number;
       audioContentType: string;
     }> = [];
-
     for (const part of parts) {
       const partInfo = await probeAudio(config.ffprobePath, part.localPath);
       const storagePath = `${project.user_id}/projects/${project.id}/parts/part_${part.index.toString().padStart(3, "0")}.m4a`;
 
-      if (partInfo.durationSec === null) {
-        throw new Error(`Could not determine duration for project part ${part.index}`);
-      }
+      const fileStats = await stat(part.localPath);
 
-      console.log(`[worker] uploading part ${part.index} to ${storagePath}`);
+      console.log(`[worker] uploading part ${part.index}: localPath=${part.localPath}, size=${fileStats.size} bytes -> storagePath=${storagePath}`);
 
+      const fileBuffer = await readFile(part.localPath);
       const { data, error } = await supabase.storage
         .from(project.storage_bucket)
-        .upload(storagePath, part.localPath, {
+        .upload(storagePath, fileBuffer, {
           contentType: "audio/mp4",
           upsert: true,
         });
 
       if (error) {
-        throw new Error(`Failed to upload part ${part.index}: ${error.message}`);
+        const msg = `Failed to upload part ${part.index}: ${error.message}`;
+        console.error(`[worker] ${msg}`);
+        await markProjectFailed(supabase, project, msg, "project_split_failed");
+        throw new ProjectFailure(msg);
       }
 
-      const fileStats = await stat(part.localPath);
+      console.log(`[worker] uploaded part ${part.index}: storagePath=${storagePath}, uploadResponse=${JSON.stringify(data)}`);
 
       uploadedParts.push({
         index: part.index,
         startSec: part.startSec,
         endSec: part.endSec,
         storagePath,
-        audioDurationSec: partInfo.durationSec,
+        audioDurationSec: partInfo.durationSec!,
         audioFileSizeBytes: fileStats.size,
         audioContentType: "audio/mp4",
       });
