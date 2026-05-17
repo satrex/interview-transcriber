@@ -405,75 +405,46 @@ export function TranscriptMarkdown({
         aria-label="Markdown preview"
       >
         {previewBlocks.map((block) => (
-          <div key={`${block.speakerLabel}-${block.startSec}`} className="mb-5">
-            <p className="font-semibold text-zinc-950">
-              {showTimestamps ? (
-                <span className="mr-2 font-mono text-xs font-normal text-zinc-500">
-                  [{formatTimestamp(block.startSec)}]
-                </span>
-              ) : null}
+          <div key={`${block.speakerLabel}-${block.startSec}`} className="mb-4">
+            <p className="mt-2 text-sm leading-8 text-zinc-700">
               <button
                 type="button"
                 onClick={() => jumpToSpeakerSetting(block.speakerLabel)}
-                className="inline-flex rounded text-left font-semibold text-zinc-950 underline decoration-zinc-300 underline-offset-2 transition hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-300"
+                className="inline font-semibold text-zinc-900 underline decoration-zinc-300 underline-offset-2 focus:outline-none focus:ring-2 focus:ring-amber-300"
               >
                 {block.speakerName}
               </button>
               {block.speakerName !== block.speakerLabel ? (
-                <span className="ml-2 text-xs text-zinc-500">({block.speakerLabel})</span>
+                <span className="ml-1 text-xs text-zinc-500">({block.speakerLabel})</span>
               ) : null}
-              ：
-            </p>
-            <div className="space-y-3">
-              {block.segments.map((segment) => {
-                const isHighlighted =
-                  highlightedPreviewSegmentId === segment.id;
-
-                return (
-                  <div
+              <span className="mx-1">：</span>
+              <span className="prose prose-sm max-w-none text-zinc-900">
+                {block.segments.map((segment) => (
+                  <span
                     key={segment.id}
                     id={getSegmentPreviewDomId(segment.id)}
-                    className={`scroll-mt-6 rounded-md border p-3 transition ${
-                      isHighlighted
-                        ? "border-amber-300 bg-amber-50 ring-2 ring-amber-300"
-                        : "border-zinc-200 bg-zinc-50"
-                    }`}
+                    className="scroll-mt-6"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="text-xs text-zinc-500">
-                        [{formatTimestamp(segment.startSec)}]
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => jumpToSegment(segment.id, "edit")}
-                        className="inline-flex min-h-9 items-center justify-center rounded-md border border-zinc-300 bg-white px-3 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+                    {splitPreviewSentences(segment.text).map((sentence, idx) => (
+                      <a
+                        key={`${segment.id}-${idx}`}
+                        href={`#${getSegmentEditDomId(segment.id)}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          jumpToSegment(segment.id, "edit");
+                        }}
+                        className="underline decoration-zinc-300 decoration-1 underline-offset-2 text-zinc-900 hover:bg-amber-50"
+                        title={`編集へ移動 (${formatTimestamp(segment.startSec)})`}
                       >
-                        編集
-                      </button>
-                    </div>
-                    <p className="mt-2 text-sm leading-7 text-zinc-900">
-                      {splitPreviewSentences(segment.text).map(
-                        (sentence, index) => (
-                          <a
-                            key={`${segment.id}-${index}`}
-                            href={`#${getSegmentEditDomId(segment.id)}`}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              jumpToSegment(segment.id, "edit");
-                            }}
-                            className="rounded-sm underline decoration-zinc-300 decoration-1 underline-offset-2 transition hover:bg-amber-50 hover:decoration-amber-500 focus:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-300"
-                            title={`${formatTimestamp(segment.startSec)} の編集へ移動`}
-                          >
-                            {sentence}
-                            {" "}
-                          </a>
-                        ),
-                      )}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
+                        {sentence}
+                        {" "}
+                      </a>
+                    ))}
+                    {" "}
+                  </span>
+                ))}
+              </span>
+            </p>
           </div>
         ))}
       </div>
