@@ -9,17 +9,7 @@ export default async function Home() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  const { data: dictionaries, error: dictionariesError } = user
-    ? await supabase
-        .from("term_dictionaries")
-        .select("id, name")
-        .eq("user_id", user.id)
-        .order("updated_at", { ascending: false })
-    : { data: [], error: null };
-
-  if (dictionariesError) {
-    throw new Error(`Failed to load term dictionaries: ${dictionariesError.message}`);
-  }
+  // no longer loading user term dictionaries for upload form
 
   return (
     <div className="min-h-screen bg-zinc-50">
@@ -64,7 +54,7 @@ export default async function Home() {
               </div>
 
               <div className="mt-8">
-                <UploadForm dictionaries={(dictionaries || []) as Array<{ id: string; name: string }>} />
+                <UploadForm />
               </div>
 
               <div className="mt-8 flex flex-wrap gap-3 border-t border-zinc-200 pt-6">
