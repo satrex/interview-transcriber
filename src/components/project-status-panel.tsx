@@ -223,6 +223,11 @@ export default function ProjectStatusPanel({
                     <Link href={`/jobs/${p.id}`} className="inline-flex items-center rounded-md bg-zinc-900 px-3 py-2 text-sm text-white">編集する</Link>
                   ) : p.status === "processing" ? (
                     <div className="text-sm text-zinc-700">処理中 ({p.progress}%)</div>
+                  ) : p.status === "failed" ? (
+                    <RetryButton part={p} projectId={project.id} onOptimistic={() => {
+                      setParts((prev) => prev.map((x) => x.id === p.id ? { ...x, status: "queued", progress: 0, error_message: null } : x));
+                      setProject((prev) => ({ ...prev, status: "processing_parts" }));
+                    }} onComplete={() => fetchStatus()} />
                   ) : (
                     <div className="text-sm text-zinc-500">{p.status}</div>
                   )}
@@ -233,5 +238,37 @@ export default function ProjectStatusPanel({
         </div>
       </div>
     </div>
+  );
+}
+
+function RetryButton({ part, projectId, onOptimistic, onComplete }: { part: Part; projectId: string; onOptimistic: () => void; onComplete: () => void }) {
+  const [loading, setLoading] = React.useState(false);
+  const handleRetry = async () => {
+    if (!confirm(`Part ${part.part_index + 1} を再実行しますか？`)) return;
+    onOptimistic();
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/parts/${part.id}/retry`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(`再実行に失敗しました: ${body?.error || res.status}`);
+        // revert optimistic by calling onComplete which refetches
+        onComplete();
+        return;
+      }
+      onComplete();
+    } catch (e) {
+      console.error(e);
+      alert("再実行中にエラーが発生しました");
+      onComplete();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button disabled={loading} onClick={handleRetry} className="inline-flex items-center rounded-md bg-amber-500 px-3 py-2 text-sm text-white">
+      {loading ? "再実行中..." : "再実行"}
+    </button>
   );
 }
