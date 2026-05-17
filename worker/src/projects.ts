@@ -8,11 +8,12 @@ import { downloadJobAudio } from "./storage.js";
 import type { TranscriptionProject } from "./supabase.js";
 
 export class ProjectFailure extends Error {
-  readonly errorCode = "project_error";
+  readonly errorCode: "project_split_failed" | "project_split_invalid_part_file";
 
-  constructor(message: string) {
+  constructor(message: string, errorCode: "project_split_failed" | "project_split_invalid_part_file") {
     super(message);
     this.name = "ProjectFailure";
+    this.errorCode = errorCode;
   }
 }
 
@@ -289,28 +290,29 @@ export async function processProject(
       });
 
       await new Promise<void>((resolve, reject) => {
-        ffmpeg.on("close", (code) => {
+        ffmpeg.on("close", (code, signal) => {
           if (code === 0) {
             resolve();
-          } else {
-            console.error(
-              `[worker] ffmpeg failed for project ${project.id}: partIndex=${i}, partStartSec=${startSec}, partDurationSec=${duration}, inputPath=${downloaded.localPath}, outputPath=${partLocalPath}, outputDir=${partsDir}, code=${code}`,
-            );
-            if (ffmpegStderr) {
-              console.error(`[worker] ffmpeg stderr:\n${ffmpegStderr}`);
-            }
-            reject(new Error(`ffmpeg exited with code ${code}`));
+            return;
           }
-        });
-        ffmpeg.on("error", (spawnError) => {
+
+          const errorMessage = `ffmpeg exited with code ${code}${signal ? ` signal ${signal}` : ""}`;
           console.error(
-            `[worker] ffmpeg spawn error for project ${project.id}: partIndex=${i}, partStartSec=${startSec}, partDurationSec=${duration}, inputPath=${downloaded.localPath}, outputPath=${partLocalPath}, outputDir=${partsDir}`,
-            spawnError,
+            `[worker] ffmpeg failed for project ${project.id}: partIndex=${i}, partStartSec=${startSec}, partDurationSec=${duration}, inputPath=${downloaded.localPath}, outputPath=${partLocalPath}, outputDir=${partsDir}, code=${code}, signal=${signal}`,
           );
           if (ffmpegStderr) {
             console.error(`[worker] ffmpeg stderr:\n${ffmpegStderr}`);
           }
-          reject(spawnError);
+          reject(new ProjectFailure(`${errorMessage}${ffmpegStderr ? `\nstderr:\n${ffmpegStderr}` : ""}`, "project_split_failed"));
+        });
+
+        ffmpeg.on("error", (spawnError) => {
+          const errorMessage = `ffmpeg spawn error for project ${project.id}: partIndex=${i}, partStartSec=${startSec}, partDurationSec=${duration}, inputPath=${downloaded.localPath}, outputPath=${partLocalPath}, outputDir=${partsDir}`;
+          console.error(errorMessage, spawnError);
+          if (ffmpegStderr) {
+            console.error(`[worker] ffmpeg stderr:\n${ffmpegStderr}`);
+          }
+          reject(new ProjectFailure(`${errorMessage}: ${spawnError instanceof Error ? spawnError.message : String(spawnError)}${ffmpegStderr ? `\nstderr:\n${ffmpegStderr}` : ""}`, "project_split_failed"));
         });
       });
 
@@ -345,8 +347,7 @@ export async function processProject(
       } catch (validationError) {
         const msg = validationError instanceof Error ? validationError.message : String(validationError);
         console.error(`[worker] project ${project.id} split validation failed: ${msg}`);
-        await markProjectFailed(supabase, project, msg, "project_split_invalid_part_file");
-        throw new ProjectFailure(msg);
+        throw new ProjectFailure(msg, "project_split_invalid_part_file");
       }
     }
 
@@ -379,8 +380,7 @@ export async function processProject(
       if (error) {
         const msg = `Failed to upload part ${part.index}: ${error.message}`;
         console.error(`[worker] ${msg}`);
-        await markProjectFailed(supabase, project, msg, "project_split_failed");
-        throw new ProjectFailure(msg);
+        throw new ProjectFailure(msg, "project_split_failed");
       }
 
       console.log(`[worker] uploaded part ${part.index}: storagePath=${storagePath}, uploadResponse=${JSON.stringify(data)}`);
@@ -402,8 +402,9 @@ export async function processProject(
     console.log(`[worker] project ${project.id} split into ${totalParts} parts`);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
+    const errorCode = error instanceof ProjectFailure ? error.errorCode : "project_split_failed";
     console.error(`[worker] project ${project.id} failed:`, message);
-    await markProjectFailed(supabase, project, message);
+    await markProjectFailed(supabase, project, message, errorCode);
     throw error;
   } finally {
     if (projectTmpDir) {
