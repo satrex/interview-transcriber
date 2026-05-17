@@ -84,8 +84,10 @@ export async function saveSegments(
 const INITIAL_SKIP_TEXTS = new Set([
   "hi",
   "hmm",
+  "mm",
   "mmhmm",
   "ohyeah",
+  "okay",
   "うん",
   "うんうん",
   "はい",
