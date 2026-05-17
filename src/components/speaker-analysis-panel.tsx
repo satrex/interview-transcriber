@@ -105,25 +105,33 @@ export function SpeakerAnalysisPanel({
                   <tr key={speaker.speakerLabel}>
                     <td className="px-3 py-2">
                       <div className="grid grid-cols-[max-content_minmax(10rem,1fr)] items-center gap-2">
-                        <label
-                          htmlFor={`speaker-${speaker.speakerLabel}`}
-                          className="min-w-8 break-all font-mono text-sm font-semibold text-zinc-900"
-                        >
-                          {speaker.speakerLabel}
-                        </label>
-                        <input
-                          id={`speaker-${speaker.speakerLabel}`}
-                          name="displayName"
-                          type="text"
-                          defaultValue={speaker.displayName}
-                          placeholder="表示名"
-                          className="min-h-9 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-900"
-                        />
-                        <input
-                          type="hidden"
-                          name="speakerLabel"
-                          value={speaker.speakerLabel}
-                        />
+                                {(() => {
+                          const speakerSettingId = `speaker-setting-${speaker.speakerLabel}`;
+
+                          return (
+                            <>
+                              <label
+                                htmlFor={speakerSettingId}
+                                className="min-w-8 break-all font-mono text-sm font-semibold text-zinc-900"
+                              >
+                                {speaker.speakerLabel}
+                              </label>
+                              <input
+                                id={speakerSettingId}
+                                name="displayName"
+                                type="text"
+                                defaultValue={speaker.displayName}
+                                placeholder="表示名"
+                                className="min-h-9 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-900"
+                              />
+                              <input
+                                type="hidden"
+                                name="speakerLabel"
+                                value={speaker.speakerLabel}
+                              />
+                            </>
+                          );
+                        })()}
                       </div>
                     </td>
                     <td className="px-3 py-2 text-zinc-800">
