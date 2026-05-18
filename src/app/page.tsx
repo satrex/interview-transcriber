@@ -59,12 +59,6 @@ export default async function Home() {
 
               <div className="mt-8 flex flex-wrap gap-3 border-t border-zinc-200 pt-6">
                 <Link
-                  href="/jobs"
-                  className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
-                >
-                  プロジェクト一覧を開く
-                </Link>
-                <Link
                   href="/settings/dictionaries"
                   className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
                 >

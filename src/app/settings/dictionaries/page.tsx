@@ -58,7 +58,7 @@ export default async function DictionariesPage({
           </p>
         </div>
         <Link
-          href="/jobs"
+          href="/projects"
           className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
         >
           プロジェクト一覧
