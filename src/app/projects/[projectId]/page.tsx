@@ -1,9 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { JobAutoRefresh } from "@/components/job-auto-refresh";
+import { ProjectExportButton } from "@/components/project-export-button";
 import ProjectStatusPanel from "@/components/project-status-panel";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { exportProjectDirectly } from "@/app/actions";
 
 type ProjectDetailPageProps = {
   params: Promise<{
@@ -71,9 +70,23 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
 
   const partJobs = await loadPartJobsForProject({ projectId, supabase, userId: user.id });
 
-  const hasActiveJobs = partJobs.some(
-    (job) => job.status === "queued" || job.status === "processing",
-  );
+  const incompletePartCount =
+    project.total_parts !== null
+      ? Math.max(0, project.total_parts - project.completed_parts)
+      : null;
+  const canExport =
+    project.status === "completed" &&
+    project.total_parts !== null &&
+    project.total_parts > 0 &&
+    project.completed_parts === project.total_parts &&
+    partJobs.length === project.total_parts &&
+    partJobs.every((job) => job.status === "completed");
+  const exportUnavailableReason = buildExportUnavailableReason({
+    incompletePartCount,
+    partJobsCount: partJobs.length,
+    projectStatus: project.status,
+    totalParts: project.total_parts,
+  });
 
   const formatTime = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
@@ -119,26 +132,46 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           <h2 className="text-lg font-semibold text-zinc-950">エクスポート</h2>
         </div>
         <div className="p-6">
-          <form action={exportProjectDirectly}>
-            <input type="hidden" name="projectId" value={project.id} />
-            {project.total_parts !== null && project.completed_parts === project.total_parts ? (
-              <button
-                type="submit"
-                className="inline-flex min-h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800"
-              >
-                Markdownでエクスポート
-              </button>
-            ) : (
-              <p className="text-sm text-zinc-600">
-                すべてのパートが完了するまでエクスポートできません。完了していないパート: {project.total_parts !== null ? project.total_parts - project.completed_parts : "?"}
-個
-              </p>
-            )}
-          </form>
+          <ProjectExportButton
+            canExport={canExport}
+            exportBaseName={project.title || project.original_filename || "transcript"}
+            projectId={project.id}
+            unavailableReason={exportUnavailableReason}
+          />
         </div>
       </section>
     </main>
   );
+}
+
+function buildExportUnavailableReason({
+  incompletePartCount,
+  partJobsCount,
+  projectStatus,
+  totalParts,
+}: {
+  incompletePartCount: number | null;
+  partJobsCount: number;
+  projectStatus: ProjectDetailRow["status"];
+  totalParts: number | null;
+}) {
+  if (projectStatus !== "completed") {
+    return "プロジェクトが完了するとMarkdownをエクスポートできます。";
+  }
+
+  if (totalParts === null || totalParts < 1) {
+    return "パート情報が未確定のため、まだエクスポートできません。";
+  }
+
+  if (partJobsCount !== totalParts) {
+    return "パート情報が不足しているため、まだエクスポートできません。";
+  }
+
+  if (incompletePartCount !== null && incompletePartCount > 0) {
+    return `すべてのパートが完了するまでエクスポートできません。完了していないパート: ${incompletePartCount}個`;
+  }
+
+  return "完了していないパートがあるため、まだエクスポートできません。";
 }
 
 async function loadProjectForCurrentUser({
