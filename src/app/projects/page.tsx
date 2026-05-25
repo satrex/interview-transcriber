@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { logout } from "@/app/actions";
+import { FailedProjectDeleteButton } from "@/components/failed-project-delete-button";
 import { JobAutoRefresh } from "@/components/job-auto-refresh";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -132,13 +133,20 @@ export default async function ProjectsPage() {
                       </p>
                     )}
                   </div>
-                  <div className="ml-4">
+                  <div className="ml-4 flex flex-col gap-2">
                     <Link
                       href={`/projects/${project.id}`}
                       className="inline-flex min-h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800"
                     >
                       詳細を見る
                     </Link>
+                    {project.status === "failed" ? (
+                      <FailedProjectDeleteButton
+                        mode="list"
+                        projectId={project.id}
+                        projectTitle={project.title}
+                      />
+                    ) : null}
                   </div>
                 </div>
               </div>

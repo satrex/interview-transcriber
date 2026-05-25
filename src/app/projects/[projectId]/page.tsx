@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { FailedProjectDeleteButton } from "@/components/failed-project-delete-button";
 import { ProjectExportButton } from "@/components/project-export-button";
 import ProjectStatusPanel from "@/components/project-status-panel";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
@@ -122,6 +123,13 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
             </p>
           )}
         </div>
+        {project.status === "failed" ? (
+          <FailedProjectDeleteButton
+            mode="detail"
+            projectId={project.id}
+            projectTitle={project.title}
+          />
+        ) : null}
       </div>
 
       <ProjectStatusPanel project={project} parts={partJobs} projectId={project.id} />

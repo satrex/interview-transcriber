@@ -89,6 +89,12 @@ export type DeleteJobActionState = {
   success: boolean;
 };
 
+export type DeleteProjectActionState = {
+  deletedProjectId?: string;
+  error: string | null;
+  success: boolean;
+};
+
 export type RetryJobActionState = {
   error: string | null;
   success: boolean;
@@ -460,6 +466,143 @@ export async function deleteTranscriptionJob(
     revalidatePath("/");
     revalidatePath("/jobs");
     return { error: null, success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
+    return { error: message, success: false };
+  }
+}
+
+export async function deleteFailedProject(
+  _previousState: DeleteProjectActionState,
+  formData: FormData,
+): Promise<DeleteProjectActionState> {
+  const projectId = getTextValue(formData, "projectId");
+
+  if (!projectId) {
+    return { error: "削除するプロジェクトが指定されていません。", success: false };
+  }
+
+  if (!isUuid(projectId)) {
+    return { error: "プロジェクトIDが不正です。", success: false };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { error: "ログインが必要です。", success: false };
+    }
+
+    const { data: project, error: projectError } = await supabase
+      .from("transcription_projects")
+      .select("id, user_id, status, storage_bucket, storage_path")
+      .eq("id", projectId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (projectError) {
+      return {
+        error: `プロジェクトの取得に失敗しました: ${projectError.message}`,
+        success: false,
+      };
+    }
+
+    if (!project) {
+      return {
+        error: "プロジェクトが見つからないか、削除権限がありません。",
+        success: false,
+      };
+    }
+
+    if (project.status !== "failed") {
+      return {
+        error: "削除できるのは failed 状態のプロジェクトだけです。",
+        success: false,
+      };
+    }
+
+    const { data: jobs, error: jobsError } = await supabase
+      .from("transcription_jobs")
+      .select("id, user_id, storage_bucket, storage_path")
+      .eq("project_id", project.id)
+      .eq("user_id", user.id);
+
+    if (jobsError) {
+      return {
+        error: `関連ジョブの取得に失敗しました: ${jobsError.message}`,
+        success: false,
+      };
+    }
+
+    const adminSupabase = createAdminSupabaseClient();
+    const storagePathsByBucket = new Map<string, Set<string>>();
+    addStoragePath(
+      storagePathsByBucket,
+      String(project.storage_bucket),
+      String(project.storage_path),
+    );
+
+    for (const job of jobs || []) {
+      addStoragePath(
+        storagePathsByBucket,
+        String(job.storage_bucket),
+        String(job.storage_path),
+      );
+
+      const chunkPathsResult = await listJobAudioChunkPaths({
+        bucket: String(job.storage_bucket),
+        jobId: String(job.id),
+      });
+
+      if (chunkPathsResult.error) {
+        return {
+          error: `関連音声チャンクの確認に失敗しました: ${chunkPathsResult.error.message}`,
+          success: false,
+        };
+      }
+
+      for (const path of chunkPathsResult.paths) {
+        addStoragePath(storagePathsByBucket, String(job.storage_bucket), path);
+      }
+    }
+
+    const { error: deleteError } = await adminSupabase
+      .from("transcription_projects")
+      .delete()
+      .eq("id", project.id)
+      .eq("user_id", user.id)
+      .eq("status", "failed");
+
+    if (deleteError) {
+      return {
+        error: `プロジェクトの削除に失敗しました: ${deleteError.message}`,
+        success: false,
+      };
+    }
+
+    for (const [bucket, paths] of storagePathsByBucket) {
+      const storageDeleteError = await deleteStorageObjects({
+        bucket,
+        paths: [...paths],
+      });
+
+      if (storageDeleteError) {
+        return {
+          deletedProjectId: project.id,
+          error: `DB上のprojectと関連データは削除済みですが、Supabase Storage の音声ファイル削除に失敗しました。${storageDeleteError.message}`,
+          success: false,
+        };
+      }
+    }
+
+    revalidatePath("/projects");
+    revalidatePath(`/projects/${project.id}`);
+    revalidatePath("/jobs");
+    return { deletedProjectId: project.id, error: null, success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
     return { error: message, success: false };
@@ -1450,4 +1593,76 @@ async function deleteJobSourceAudio(options: { bucket: string; path: string }) {
     .remove([options.path]);
 
   return error;
+}
+
+function addStoragePath(
+  pathsByBucket: Map<string, Set<string>>,
+  bucket: string,
+  path: string,
+) {
+  if (!bucket || !path) {
+    return;
+  }
+
+  const paths = pathsByBucket.get(bucket) ?? new Set<string>();
+  paths.add(path);
+  pathsByBucket.set(bucket, paths);
+}
+
+async function listJobAudioChunkPaths(options: {
+  bucket: string;
+  jobId: string;
+}) {
+  const adminSupabase = createAdminSupabaseClient();
+  const directory = `jobs/${options.jobId}/chunks`;
+  const paths: string[] = [];
+
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await adminSupabase.storage
+      .from(options.bucket)
+      .list(directory, {
+        limit: 1000,
+        offset,
+      });
+
+    if (error) {
+      return { error, paths: [] };
+    }
+
+    const page = data || [];
+    paths.push(
+      ...page
+        .filter((object) => object.name && object.id !== null)
+        .map((object) => `${directory}/${object.name}`),
+    );
+
+    if (page.length < 1000) {
+      break;
+    }
+  }
+
+  return { error: null, paths };
+}
+
+async function deleteStorageObjects(options: {
+  bucket: string;
+  paths: string[];
+}) {
+  if (options.paths.length === 0) {
+    return null;
+  }
+
+  const adminSupabase = createAdminSupabaseClient();
+
+  for (let offset = 0; offset < options.paths.length; offset += 100) {
+    const { error } = await adminSupabase.storage
+      .from(options.bucket)
+      .remove(options.paths.slice(offset, offset + 100));
+
+    if (error) {
+      return error;
+    }
+  }
+
+  return null;
 }
