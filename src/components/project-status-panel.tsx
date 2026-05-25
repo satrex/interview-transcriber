@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import Link from "next/link";
+import { FailedProjectDeleteButton } from "@/components/failed-project-delete-button";
 
 type Project = {
   id: string;
@@ -54,8 +55,9 @@ function formatTime(seconds: number | null) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function relativeTimeLabel(dateIso: string) {
-  const diff = Math.floor((Date.now() - new Date(dateIso).getTime()) / 1000);
+function relativeTimeLabel(dateIso: string, currentTimeMs: number | null) {
+  const now = currentTimeMs ?? new Date(dateIso).getTime();
+  const diff = Math.floor((now - new Date(dateIso).getTime()) / 1000);
   if (diff < 5) return "たった今";
   if (diff < 60) return `${diff}秒前`;
   if (diff < 3600) return `${Math.floor(diff / 60)}分前`;
@@ -75,7 +77,7 @@ export default function ProjectStatusPanel({
   const [project, setProject] = useState<Project>(initialProject);
   const [parts, setParts] = useState<Part[]>(initialParts);
   const [lastUpdated, setLastUpdated] = useState<string>(new Date().toISOString());
-  const [now, setNow] = useState<number>(Date.now());
+  const [currentTimeMs, setCurrentTimeMs] = useState<number | null>(null);
   const pollingRef = useRef<number | null>(null);
 
   const isActiveStatus = (s: string) => ["queued", "splitting", "processing_parts", "processing", "split_completed"].includes(s);
@@ -127,14 +129,13 @@ export default function ProjectStatusPanel({
   }, [projectId]);
 
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    const id = window.setInterval(() => setCurrentTimeMs(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
 
   const totalParts = project.total_parts ?? parts.length;
   const completedParts = project.completed_parts ?? parts.filter((p) => p.status === "completed").length;
   const processingProgressSum = parts.filter((p) => p.status === "processing").reduce((sum, p) => sum + (p.progress || 0), 0);
-  const inProgressCount = parts.filter((p) => p.status === "processing").length;
 
   const projectProgress = totalParts > 0 ? Math.round(((completedParts + (processingProgressSum / 100)) / totalParts) * 100) : null;
 
@@ -155,7 +156,7 @@ export default function ProjectStatusPanel({
   const etaLabel = (() => {
     if (projectProgress === null || projectProgress < 10) return null;
     const createdAt = new Date(project.created_at).getTime();
-    const elapsed = Date.now() - createdAt;
+    const elapsed = (currentTimeMs ?? createdAt) - createdAt;
     const estimatedTotal = Math.round(elapsed / (projectProgress / 100));
     const remaining = Math.max(0, estimatedTotal - elapsed);
     const mins = Math.round(remaining / 60000);
@@ -181,9 +182,18 @@ export default function ProjectStatusPanel({
             <p className="mt-2 text-sm text-zinc-600">{phaseText}</p>
           </div>
           <div className="text-right text-sm text-zinc-600">
-            <div>最後の更新: {relativeTimeLabel(lastUpdated)}</div>
+            <div>最後の更新: {relativeTimeLabel(lastUpdated, currentTimeMs)}</div>
             {etaLabel && <div>推定残り時間: {etaLabel}</div>}
             <div className="mt-2 text-xs text-zinc-500">画面を閉じても処理は続きます。</div>
+            {project.status === "failed" ? (
+              <div className="mt-4 flex justify-end">
+                <FailedProjectDeleteButton
+                  mode="detail"
+                  projectId={project.id}
+                  projectTitle={project.title}
+                />
+              </div>
+            ) : null}
           </div>
         </div>
 
