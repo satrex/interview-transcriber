@@ -13,9 +13,11 @@ export type SpeakerNameFormRow = {
   displayName: string;
 };
 
-type SpeakerAnalysisPanelProps = {
+export type SpeakerAnalysisPanelProps = {
   analysis: SpeakerAnalysis;
   jobId: string;
+  onReturnToPreviewPosition?: () => void;
+  speakerReturnSegmentId?: string | null;
   speakers: SpeakerNameFormRow[];
 };
 
@@ -27,6 +29,8 @@ const initialState: SpeakerNamesActionState = {
 export function SpeakerAnalysisPanel({
   analysis,
   jobId,
+  onReturnToPreviewPosition,
+  speakerReturnSegmentId = null,
   speakers,
 }: SpeakerAnalysisPanelProps) {
   const [state, formAction, pending] = useActionState(
@@ -56,6 +60,18 @@ export function SpeakerAnalysisPanel({
           speaker_label と表示名、発話量、要確認判定を同じ表で確認します。
         </p>
       </div>
+
+      {speakerReturnSegmentId ? (
+        <div className="sticky top-0 z-20 mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 shadow-sm sm:static sm:px-4">
+          <button
+            type="button"
+            onClick={onReturnToPreviewPosition}
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800 sm:w-auto"
+          >
+            読んでいた場所へ戻る
+          </button>
+        </div>
+      ) : null}
 
       <ExpectedSpeakerCountForm
         expectedSpeakerCount={analysis.expectedSpeakerCount}

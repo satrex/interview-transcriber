@@ -1,15 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { JobAutoRefresh } from "@/components/job-auto-refresh";
+import { InterviewEditor } from "@/components/interview-editor";
 import {
   QualityNotesForm,
   type QualityNotesFormValues,
 } from "@/components/quality-notes-form";
 import {
-  SpeakerAnalysisPanel,
   type SpeakerNameFormRow,
 } from "@/components/speaker-analysis-panel";
-import { TranscriptMarkdown } from "@/components/transcript-markdown";
 import { analyzeSpeakers } from "@/lib/speaker-analysis";
 import { getJobErrorDisplayMessage } from "@/lib/job-errors";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
@@ -315,13 +314,8 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
           <QualityNotesForm jobId={job.id} initialValues={qualityNoteValues} />
         </details>
 
-        <SpeakerAnalysisPanel
+        <InterviewEditor
           analysis={speakerAnalysis}
-          jobId={job.id}
-          speakers={speakerFormRows}
-        />
-
-        <TranscriptMarkdown
           audioChunkDurationSec={audioChunkDurationSec}
           audioUrl={audioSignedUrl}
           audioLoadError={audioChunkDurationSec ? null : audioLoadError}
@@ -330,6 +324,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
           segmentEdits={segmentEdits}
           segments={segments}
           speakerNames={speakerNames}
+          speakers={speakerFormRows}
         />
       </section>
     </main>

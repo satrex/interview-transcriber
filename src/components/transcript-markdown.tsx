@@ -30,23 +30,27 @@ import {
 } from "@/lib/transcript";
 import { useSegmentAudioPlayback } from "./use-segment-audio-playback";
 
-type TranscriptMarkdownProps = {
+export type TranscriptMarkdownProps = {
+  activeReturnHighlightSegmentId?: string | null;
   audioChunkDurationSec?: number | null;
   audioLoadError?: string | null;
   audioUrl: string | null;
   exportBaseName?: string;
   jobId: string;
+  onSpeakerLabelClick?: (segmentId: string, speakerLabel: string) => void;
   segmentEdits?: SegmentEditMap;
   segments: TranscriptSegment[];
   speakerNames?: SpeakerNameMap;
 };
 
 export function TranscriptMarkdown({
+  activeReturnHighlightSegmentId = null,
   audioChunkDurationSec = null,
   audioLoadError = null,
   audioUrl,
   exportBaseName = "transcript",
   jobId,
+  onSpeakerLabelClick,
   segmentEdits = {},
   segments,
   speakerNames = {},
@@ -409,7 +413,16 @@ export function TranscriptMarkdown({
             <p className="mt-2 text-sm leading-8 text-zinc-700">
               <button
                 type="button"
-                onClick={() => jumpToSpeakerSetting(block.speakerLabel)}
+                onClick={() => {
+                  const firstSegmentId = block.segments[0]?.id;
+
+                  if (firstSegmentId && onSpeakerLabelClick) {
+                    onSpeakerLabelClick(firstSegmentId, block.speakerLabel);
+                    return;
+                  }
+
+                  jumpToSpeakerSetting(block.speakerLabel);
+                }}
                 className="inline font-semibold text-zinc-900 underline decoration-zinc-300 underline-offset-2 focus:outline-none focus:ring-2 focus:ring-amber-300"
               >
                 {block.speakerName}
@@ -423,7 +436,12 @@ export function TranscriptMarkdown({
                   <span
                     key={segment.id}
                     id={getSegmentPreviewDomId(segment.id)}
-                    className="scroll-mt-6"
+                    className={`scroll-mt-6 rounded-sm transition ${
+                      activeReturnHighlightSegmentId === segment.id ||
+                      highlightedPreviewSegmentId === segment.id
+                        ? "bg-amber-100 ring-2 ring-amber-300"
+                        : ""
+                    }`}
                   >
                     {splitPreviewSentences(segment.text).map((sentence, idx) => (
                       <a
@@ -1405,5 +1423,5 @@ function debugSegmentSaveMetric(
 }
 
 function getSegmentPreviewDomId(segmentId: string) {
-  return `segment-preview-${segmentId}`;
+  return `preview-segment-${segmentId}`;
 }
