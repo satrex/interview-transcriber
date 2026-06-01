@@ -6,13 +6,12 @@ export type TipStatus = "paid" | "failed" | "refunded";
 export type PayoutNotificationStatus = "pending" | "notified";
 export type ArtistPayoutStatus = "pending" | "paid";
 
-export const UNCATEGORIZED_TIP_ARTIST_ID = "uncategorized";
-
 export type TipRow = {
   id: string;
   stripe_checkout_session_id: string;
   stripe_payment_intent_id: string | null;
-  artist_id: string;
+  artist_id: string | null;
+  artists: ArtistCandidate | null;
   tip_type: string;
   amount: number;
   currency: string;

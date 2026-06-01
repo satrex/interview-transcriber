@@ -12,7 +12,6 @@ import {
   formatMinorCurrency,
   formatPayoutMonth,
   normalizePayoutMonth,
-  UNCATEGORIZED_TIP_ARTIST_ID,
   type ArtistCandidate,
   type MonthlyArtistPayoutRow,
   type TipRow,
@@ -48,7 +47,7 @@ export default async function AdminTipsPage({
       supabase
         .from("tips")
         .select(
-          "id, stripe_checkout_session_id, stripe_payment_intent_id, artist_id, tip_type, amount, currency, status, paid_at, payout_month, stripe_description, stripe_customer_email, stripe_metadata, created_at",
+          "id, stripe_checkout_session_id, stripe_payment_intent_id, artist_id, tip_type, amount, currency, status, paid_at, payout_month, stripe_description, stripe_customer_email, stripe_metadata, created_at, artists:artists!tips_artist_id_fkey(id, display_name)",
         )
         .eq("payout_month", payoutMonth)
         .order("paid_at", { ascending: false }),
@@ -62,7 +61,8 @@ export default async function AdminTipsPage({
       supabase
         .from("artists")
         .select("id, display_name")
-        .order("display_name", { ascending: true }),
+        .order("display_name", { ascending: true })
+        .limit(20),
     ]);
 
   if (tipsError) {
@@ -77,12 +77,19 @@ export default async function AdminTipsPage({
     throw new Error(`artists の取得に失敗しました: ${artistsError.message}`);
   }
 
-  const typedTips = (tips || []) as TipRow[];
+  const typedTips = ((tips || []) as Array<
+    Omit<TipRow, "artists"> & {
+      artists: ArtistCandidate | ArtistCandidate[] | null;
+    }
+  >).map((tip) => ({
+    ...tip,
+    artists: Array.isArray(tip.artists) ? tip.artists[0] || null : tip.artists,
+  }));
   const typedPayouts = (payouts || []) as MonthlyArtistPayoutRow[];
   const artistCandidates = (artists || []) as ArtistCandidate[];
   const aggregateRows = buildArtistAggregates(typedTips);
   const uncategorizedTips = typedTips.filter(
-    (tip) => tip.artist_id === UNCATEGORIZED_TIP_ARTIST_ID,
+    (tip) => tip.artist_id === null,
   );
   const closeAction = closeMonthlyArtistPayouts.bind(null);
   const importAction = importStripeTipsForMonth.bind(null);
@@ -159,6 +166,7 @@ export default async function AdminTipsPage({
               <thead className="bg-zinc-50 text-zinc-500">
                 <tr>
                   <th className="px-3 py-2 font-medium">artist_id</th>
+                  <th className="px-3 py-2 font-medium">artist</th>
                   <th className="px-3 py-2 font-medium">currency</th>
                   <th className="px-3 py-2 font-medium">paid</th>
                   <th className="px-3 py-2 font-medium">refunded</th>
@@ -170,6 +178,7 @@ export default async function AdminTipsPage({
                 {aggregateRows.map((row) => (
                   <tr key={`${row.artistId}-${row.currency}`}>
                     <td className="px-3 py-2 font-mono text-xs">{row.artistId}</td>
+                    <td className="px-3 py-2">{row.artistName}</td>
                     <td className="px-3 py-2 uppercase">{row.currency}</td>
                     <td className="px-3 py-2 font-semibold">
                       {formatMinorCurrency(row.paidAmount, row.currency)}
@@ -185,7 +194,7 @@ export default async function AdminTipsPage({
                 ))}
                 {aggregateRows.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-6 text-center text-zinc-500" colSpan={6}>
+                    <td className="px-3 py-6 text-center text-zinc-500" colSpan={7}>
                       この月の投げ銭はまだありません。
                     </td>
                   </tr>
@@ -264,6 +273,7 @@ export default async function AdminTipsPage({
                 <tr>
                   <th className="px-3 py-2 font-medium">paid_at</th>
                   <th className="px-3 py-2 font-medium">artist_id</th>
+                  <th className="px-3 py-2 font-medium">artist</th>
                   <th className="px-3 py-2 font-medium">type</th>
                   <th className="px-3 py-2 font-medium">amount</th>
                   <th className="px-3 py-2 font-medium">status</th>
@@ -276,7 +286,8 @@ export default async function AdminTipsPage({
                     <td className="px-3 py-2 text-xs text-zinc-600">
                       {tip.paid_at ? new Date(tip.paid_at).toLocaleString("ja-JP") : "-"}
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs">{tip.artist_id}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{tip.artist_id || "未分類"}</td>
+                    <td className="px-3 py-2">{tip.artists?.display_name || "-"}</td>
                     <td className="px-3 py-2">{tip.tip_type}</td>
                     <td className="px-3 py-2 font-semibold">
                       {formatMinorCurrency(tip.amount, tip.currency)}
@@ -294,7 +305,7 @@ export default async function AdminTipsPage({
                 ))}
                 {typedTips.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-6 text-center text-zinc-500" colSpan={6}>
+                    <td className="px-3 py-6 text-center text-zinc-500" colSpan={7}>
                       この月の投げ銭はまだありません。
                     </td>
                   </tr>
@@ -322,6 +333,7 @@ function buildArtistAggregates(tips: TipRow[]) {
     string,
     {
       artistId: string;
+      artistName: string;
       count: number;
       currency: string;
       failedAmount: number;
@@ -331,11 +343,16 @@ function buildArtistAggregates(tips: TipRow[]) {
   >();
 
   for (const tip of tips) {
+    if (!tip.artist_id) {
+      continue;
+    }
+
     const key = `${tip.artist_id}:${tip.currency}`;
     const row =
       rows.get(key) ||
       {
         artistId: tip.artist_id,
+        artistName: tip.artists?.display_name || tip.artist_id,
         count: 0,
         currency: tip.currency,
         failedAmount: 0,

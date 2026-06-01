@@ -57,6 +57,20 @@ export async function assignTipArtist(formData: FormData) {
   }
 
   const supabase = createAdminSupabaseClient();
+  const { data: artist, error: artistError } = await supabase
+    .from("artists")
+    .select("id")
+    .eq("id", artistId)
+    .maybeSingle();
+
+  if (artistError) {
+    throw new Error(`アーティスト確認に失敗しました: ${artistError.message}`);
+  }
+
+  if (!artist) {
+    throw new Error("選択したアーティストが見つかりません。");
+  }
+
   const { error } = await supabase
     .from("tips")
     .update({

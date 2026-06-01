@@ -3,10 +3,7 @@ import "server-only";
 import Stripe from "stripe";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getStripeClient } from "@/lib/stripe";
-import {
-  UNCATEGORIZED_TIP_ARTIST_ID,
-  type TipStatus,
-} from "@/lib/tips";
+import { type TipStatus } from "@/lib/tips";
 
 export type StripeTipSyncResult = {
   imported: number;
@@ -15,7 +12,7 @@ export type StripeTipSyncResult = {
 
 type TipUpsert = {
   amount: number;
-  artist_id: string;
+  artist_id: string | null;
   currency: string;
   paid_at: string | null;
   payout_month: string;
@@ -152,7 +149,7 @@ async function buildTipUpsert(
 
   return {
     amount,
-    artist_id: getMetadataValue(metadata, "artist_id") || UNCATEGORIZED_TIP_ARTIST_ID,
+    artist_id: getMetadataValue(metadata, "artist_id") || null,
     currency,
     paid_at: paidAt,
     payout_month: `${eventTime.slice(0, 7)}-01`,

@@ -19,18 +19,11 @@ create table if not exists public.app_admins (
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.artists (
-  id text primary key,
-  display_name text not null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
 create table if not exists public.tips (
   id uuid primary key default gen_random_uuid(),
   stripe_checkout_session_id text not null,
   stripe_payment_intent_id text,
-  artist_id text not null,
+  artist_id text,
   tip_type text not null default 'tip',
   amount integer not null check (amount >= 0),
   currency text not null,
@@ -72,17 +65,6 @@ create index if not exists tips_payout_month_artist_status_idx
 
 create index if not exists monthly_artist_payouts_month_status_idx
   on public.monthly_artist_payouts (payout_month, payout_status, artist_id);
-
-create index if not exists artists_display_name_idx
-  on public.artists (display_name);
-
-drop trigger if exists set_artists_updated_at
-on public.artists;
-
-create trigger set_artists_updated_at
-before update on public.artists
-for each row
-execute function public.set_updated_at();
 
 drop trigger if exists set_monthly_artist_payouts_updated_at
 on public.monthly_artist_payouts;
@@ -129,12 +111,14 @@ using (public.is_current_user_admin());
 drop policy if exists "Admins can manage artists"
 on public.artists;
 
-create policy "Admins can manage artists"
+drop policy if exists "Admins can select artists"
+on public.artists;
+
+create policy "Admins can select artists"
 on public.artists
-for all
+for select
 to authenticated
-using (public.is_current_user_admin())
-with check (public.is_current_user_admin());
+using (public.is_current_user_admin());
 
 drop policy if exists "Admins can manage tips"
 on public.tips;
@@ -197,7 +181,7 @@ begin
     from public.tips
     where tips.payout_month = date_trunc('month', p_payout_month)::date
       and tips.status = 'paid'
-      and tips.artist_id <> 'uncategorized'
+      and tips.artist_id is not null
     group by tips.artist_id, tips.payout_month, tips.currency
   ),
   upserted as (
@@ -247,9 +231,6 @@ to authenticated;
 
 comment on table public.tips is
   'Stripe Checkout tip payments keyed by Checkout Session and artist metadata.';
-
-comment on table public.artists is
-  'Admin-managed artist candidates used to classify Stripe tip payments.';
 
 comment on table public.monthly_artist_payouts is
   'Manual monthly payout task records for artist tip settlements.';

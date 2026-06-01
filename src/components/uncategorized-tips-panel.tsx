@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ChangeEvent } from "react";
 import { assignTipArtist } from "@/app/admin/tips/actions";
 import type {
   ArtistCandidate,
@@ -14,6 +14,7 @@ type UncategorizedTipsPanelProps = {
 };
 
 type RowSelection = {
+  artistId: string;
   artistOption: string;
 };
 
@@ -23,13 +24,15 @@ export function UncategorizedTipsPanel({
   tips,
 }: UncategorizedTipsPanelProps) {
   const [selections, setSelections] = useState<Record<string, RowSelection>>({});
+  const [artistResults, setArtistResults] =
+    useState<ArtistCandidate[]>(artists);
   const artistOptions = useMemo(
     () =>
-      artists.map((artist) => ({
+      artistResults.map((artist) => ({
         id: artist.id,
-        label: `${artist.display_name} (${artist.id})`,
+        label: artist.display_name,
       })),
-    [artists],
+    [artistResults],
   );
 
   if (tips.length === 0) {
@@ -40,23 +43,68 @@ export function UncategorizedTipsPanel({
     setSelections((current) => ({
       ...current,
       [tipId]: {
+        artistId: current[tipId]?.artistId || "",
         artistOption: current[tipId]?.artistOption || "",
         ...values,
       },
     }));
   }
 
+  async function handleArtistSearch(
+    tipId: string,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const value = event.target.value;
+    const matchedArtist = artistOptions.find((option) => option.label === value);
+
+    updateSelection(tipId, {
+      artistId: matchedArtist?.id || "",
+      artistOption: value,
+    });
+
+    const params = new URLSearchParams();
+
+    if (value.trim()) {
+      params.set("query", value.trim());
+    }
+
+    const response = await fetch(`/admin/tips/artists?${params.toString()}`);
+
+    if (!response.ok) {
+      return;
+    }
+
+    const payload = (await response.json()) as { artists?: ArtistCandidate[] };
+    const nextArtists = payload.artists || [];
+    const nextMatchedArtist = nextArtists.find(
+      (artist) => artist.display_name === value,
+    );
+
+    setArtistResults(nextArtists);
+
+    if (nextMatchedArtist) {
+      updateSelection(tipId, {
+        artistId: nextMatchedArtist.id,
+        artistOption: value,
+      });
+    }
+  }
+
   return (
     <section className="mt-8">
       <h2 className="text-xl font-semibold">未分類の投げ銭</h2>
+      {artists.length === 0 ? (
+        <p className="mt-3 rounded-md border border-amber-300 bg-white px-3 py-2 text-sm text-amber-950">
+          アーティストが未登録です。public.artists に display_name を登録すると、ここで選択できます。
+        </p>
+      ) : null}
       <div className="mt-4 grid gap-3">
         {tips.map((tip) => {
           const selection = selections[tip.id] || {
+            artistId: "",
             artistOption: "",
           };
-          const selectedArtistId =
-            artistOptions.find((option) => option.label === selection.artistOption)
-              ?.id || "";
+          const selectedArtistId = selection.artistId;
 
           return (
             <article
@@ -100,11 +148,7 @@ export function UncategorizedTipsPanel({
                       list={`artist-options-${tip.id}`}
                       required
                       value={selection.artistOption}
-                      onChange={(event) =>
-                        updateSelection(tip.id, {
-                          artistOption: event.target.value,
-                        })
-                      }
+                      onChange={(event) => void handleArtistSearch(tip.id, event)}
                       placeholder="名前で検索"
                       className="mt-1 min-h-10 w-full rounded-md border border-amber-300 bg-white px-3 text-sm text-zinc-950"
                     />
