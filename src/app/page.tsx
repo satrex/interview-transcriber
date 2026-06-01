@@ -9,6 +9,13 @@ export default async function Home() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  let isAdmin = false;
+
+  if (user) {
+    const { data, error } = await supabase.rpc("is_current_user_admin");
+
+    isAdmin = !error && data === true;
+  }
   // no longer loading user term dictionaries for upload form
 
   return (
@@ -64,6 +71,14 @@ export default async function Home() {
                 >
                   用語辞書を管理
                 </Link>
+                {isAdmin ? (
+                  <Link
+                    href="/admin/tips"
+                    className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50"
+                  >
+                    投げ銭月次管理
+                  </Link>
+                ) : null}
               </div>
             </>
           ) : (
