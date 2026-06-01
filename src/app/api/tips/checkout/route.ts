@@ -7,7 +7,6 @@ type CheckoutTipRequest = {
   artistId?: unknown;
   cancelUrl?: unknown;
   currency?: unknown;
-  eventId?: unknown;
   successUrl?: unknown;
   tipType?: unknown;
 };
@@ -22,16 +21,12 @@ export async function POST(request: Request) {
   }
 
   const artistId = getRequiredString(body.artistId);
-  const eventId = getRequiredString(body.eventId);
   const tipType = getRequiredString(body.tipType) || "tip";
   const currency = (getRequiredString(body.currency) || "jpy").toLowerCase();
   const amount = typeof body.amount === "number" ? Math.round(body.amount) : 0;
 
-  if (!artistId || !eventId) {
-    return Response.json(
-      { error: "artist_id_and_event_id_required" },
-      { status: 400 },
-    );
+  if (!artistId) {
+    return Response.json({ error: "artist_id_required" }, { status: 400 });
   }
 
   if (!Number.isInteger(amount) || amount <= 0) {
@@ -49,7 +44,6 @@ export async function POST(request: Request) {
     `${origin}/`;
   const metadata = {
     artist_id: artistId,
-    event_id: eventId,
     tip_type: tipType,
   };
   const stripe = getStripeClient();

@@ -19,18 +19,27 @@ create table if not exists public.app_admins (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.artists (
+  id text primary key,
+  display_name text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.tips (
   id uuid primary key default gen_random_uuid(),
   stripe_checkout_session_id text not null,
   stripe_payment_intent_id text,
   artist_id text not null,
-  event_id text not null,
   tip_type text not null default 'tip',
   amount integer not null check (amount >= 0),
   currency text not null,
   status public.tip_status not null,
   paid_at timestamptz,
   payout_month date not null,
+  stripe_description text,
+  stripe_customer_email text,
+  stripe_metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
 
@@ -64,6 +73,17 @@ create index if not exists tips_payout_month_artist_status_idx
 create index if not exists monthly_artist_payouts_month_status_idx
   on public.monthly_artist_payouts (payout_month, payout_status, artist_id);
 
+create index if not exists artists_display_name_idx
+  on public.artists (display_name);
+
+drop trigger if exists set_artists_updated_at
+on public.artists;
+
+create trigger set_artists_updated_at
+before update on public.artists
+for each row
+execute function public.set_updated_at();
+
 drop trigger if exists set_monthly_artist_payouts_updated_at
 on public.monthly_artist_payouts;
 
@@ -93,6 +113,7 @@ grant execute on function public.is_current_user_admin()
 to authenticated;
 
 alter table public.app_admins enable row level security;
+alter table public.artists enable row level security;
 alter table public.tips enable row level security;
 alter table public.monthly_artist_payouts enable row level security;
 
@@ -104,6 +125,16 @@ on public.app_admins
 for select
 to authenticated
 using (public.is_current_user_admin());
+
+drop policy if exists "Admins can manage artists"
+on public.artists;
+
+create policy "Admins can manage artists"
+on public.artists
+for all
+to authenticated
+using (public.is_current_user_admin())
+with check (public.is_current_user_admin());
 
 drop policy if exists "Admins can manage tips"
 on public.tips;
@@ -215,13 +246,19 @@ grant execute on function public.close_monthly_artist_payouts(date, integer)
 to authenticated;
 
 comment on table public.tips is
-  'Stripe Checkout tip payments keyed by Checkout Session and artist/event metadata.';
+  'Stripe Checkout tip payments keyed by Checkout Session and artist metadata.';
+
+comment on table public.artists is
+  'Admin-managed artist candidates used to classify Stripe tip payments.';
 
 comment on table public.monthly_artist_payouts is
   'Manual monthly payout task records for artist tip settlements.';
 
 comment on column public.tips.amount is
   'Gross tip amount in the currency minor unit used by Stripe.';
+
+comment on column public.tips.stripe_metadata is
+  'Merged metadata from Stripe Checkout Session, PaymentIntent, and Charge for admin classification.';
 
 comment on column public.monthly_artist_payouts.fee_amount is
   'Deducted fee amount in the same currency minor unit. Calculated during monthly close.';

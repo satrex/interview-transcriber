@@ -5,7 +5,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getStripeClient } from "@/lib/stripe";
 import {
   UNCATEGORIZED_TIP_ARTIST_ID,
-  UNCATEGORIZED_TIP_EVENT_ID,
   type TipStatus,
 } from "@/lib/tips";
 
@@ -18,11 +17,13 @@ type TipUpsert = {
   amount: number;
   artist_id: string;
   currency: string;
-  event_id: string;
   paid_at: string | null;
   payout_month: string;
   status: TipStatus;
+  stripe_customer_email: string | null;
+  stripe_description: string | null;
   stripe_checkout_session_id: string;
+  stripe_metadata: Record<string, string>;
   stripe_payment_intent_id: string | null;
   tip_type: string;
 };
@@ -153,11 +154,18 @@ async function buildTipUpsert(
     amount,
     artist_id: getMetadataValue(metadata, "artist_id") || UNCATEGORIZED_TIP_ARTIST_ID,
     currency,
-    event_id: getMetadataValue(metadata, "event_id") || UNCATEGORIZED_TIP_EVENT_ID,
     paid_at: paidAt,
     payout_month: `${eventTime.slice(0, 7)}-01`,
     status,
+    stripe_customer_email:
+      session.customer_details?.email ||
+      session.customer_email ||
+      paymentIntent?.receipt_email ||
+      charge?.billing_details.email ||
+      null,
     stripe_checkout_session_id: session.id,
+    stripe_description: charge?.description || paymentIntent?.description || null,
+    stripe_metadata: metadata,
     stripe_payment_intent_id: paymentIntent?.id ?? getStripeId(session.payment_intent),
     tip_type: getMetadataValue(metadata, "tip_type") || "tip",
   };

@@ -1,19 +1,19 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import {
-  assignTipArtist,
   closeMonthlyArtistPayouts,
   importStripeTipsForMonth,
   markPayoutNotified,
   markPayoutPaid,
 } from "@/app/admin/tips/actions";
+import { UncategorizedTipsPanel } from "@/components/uncategorized-tips-panel";
 import {
   assertCurrentUserIsAdmin,
   formatMinorCurrency,
   formatPayoutMonth,
   normalizePayoutMonth,
   UNCATEGORIZED_TIP_ARTIST_ID,
-  UNCATEGORIZED_TIP_EVENT_ID,
+  type ArtistCandidate,
   type MonthlyArtistPayoutRow,
   type TipRow,
 } from "@/lib/tips";
@@ -40,12 +40,15 @@ export default async function AdminTipsPage({
     notFound();
   }
 
-  const [{ data: tips, error: tipsError }, { data: payouts, error: payoutsError }] =
-    await Promise.all([
+  const [
+    { data: tips, error: tipsError },
+    { data: payouts, error: payoutsError },
+    { data: artists, error: artistsError },
+  ] = await Promise.all([
       supabase
         .from("tips")
         .select(
-          "id, stripe_checkout_session_id, stripe_payment_intent_id, artist_id, event_id, tip_type, amount, currency, status, paid_at, payout_month, created_at",
+          "id, stripe_checkout_session_id, stripe_payment_intent_id, artist_id, tip_type, amount, currency, status, paid_at, payout_month, stripe_description, stripe_customer_email, stripe_metadata, created_at",
         )
         .eq("payout_month", payoutMonth)
         .order("paid_at", { ascending: false }),
@@ -56,6 +59,10 @@ export default async function AdminTipsPage({
         )
         .eq("payout_month", payoutMonth)
         .order("artist_id", { ascending: true }),
+      supabase
+        .from("artists")
+        .select("id, display_name")
+        .order("display_name", { ascending: true }),
     ]);
 
   if (tipsError) {
@@ -66,8 +73,13 @@ export default async function AdminTipsPage({
     throw new Error(`monthly_artist_payouts の取得に失敗しました: ${payoutsError.message}`);
   }
 
+  if (artistsError) {
+    throw new Error(`artists の取得に失敗しました: ${artistsError.message}`);
+  }
+
   const typedTips = (tips || []) as TipRow[];
   const typedPayouts = (payouts || []) as MonthlyArtistPayoutRow[];
+  const artistCandidates = (artists || []) as ArtistCandidate[];
   const aggregateRows = buildArtistAggregates(typedTips);
   const uncategorizedTips = typedTips.filter(
     (tip) => tip.artist_id === UNCATEGORIZED_TIP_ARTIST_ID,
@@ -134,76 +146,11 @@ export default async function AdminTipsPage({
           </div>
         </div>
 
-        {uncategorizedTips.length > 0 ? (
-          <section className="mt-8">
-            <h2 className="text-xl font-semibold">未分類の投げ銭</h2>
-            <div className="mt-4 grid gap-3">
-              {uncategorizedTips.map((tip) => (
-                <article
-                  key={tip.id}
-                  className="rounded-md border border-amber-200 bg-amber-50 p-4"
-                >
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-amber-950">
-                        {formatMinorCurrency(tip.amount, tip.currency)} / {tip.status}
-                      </p>
-                      <p className="mt-1 break-all font-mono text-xs text-amber-900">
-                        {tip.stripe_checkout_session_id}
-                      </p>
-                      {tip.stripe_payment_intent_id ? (
-                        <p className="mt-1 break-all font-mono text-xs text-amber-800">
-                          {tip.stripe_payment_intent_id}
-                        </p>
-                      ) : null}
-                    </div>
-                    <form
-                      action={assignTipArtist}
-                      className="grid gap-2 sm:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(8rem,0.7fr)_auto]"
-                    >
-                      <input type="hidden" name="tipId" value={tip.id} />
-                      <input type="hidden" name="month" value={displayMonth} />
-                      <label className="text-xs font-medium text-amber-950">
-                        artist_id
-                        <input
-                          name="artistId"
-                          required
-                          className="mt-1 min-h-10 w-full rounded-md border border-amber-300 bg-white px-3 text-sm text-zinc-950"
-                        />
-                      </label>
-                      <label className="text-xs font-medium text-amber-950">
-                        event_id
-                        <input
-                          name="eventId"
-                          defaultValue={
-                            tip.event_id === UNCATEGORIZED_TIP_EVENT_ID
-                              ? ""
-                              : tip.event_id
-                          }
-                          className="mt-1 min-h-10 w-full rounded-md border border-amber-300 bg-white px-3 text-sm text-zinc-950"
-                        />
-                      </label>
-                      <label className="text-xs font-medium text-amber-950">
-                        tip_type
-                        <input
-                          name="tipType"
-                          defaultValue={tip.tip_type}
-                          className="mt-1 min-h-10 w-full rounded-md border border-amber-300 bg-white px-3 text-sm text-zinc-950"
-                        />
-                      </label>
-                      <button
-                        type="submit"
-                        className="inline-flex min-h-10 items-center justify-center self-end rounded-md bg-zinc-950 px-4 text-sm font-semibold text-white hover:bg-zinc-800"
-                      >
-                        紐づけ
-                      </button>
-                    </form>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
-        ) : null}
+        <UncategorizedTipsPanel
+          artists={artistCandidates}
+          displayMonth={displayMonth}
+          tips={uncategorizedTips}
+        />
 
         <section className="mt-8">
           <h2 className="text-xl font-semibold">アーティスト別集計</h2>
@@ -317,7 +264,6 @@ export default async function AdminTipsPage({
                 <tr>
                   <th className="px-3 py-2 font-medium">paid_at</th>
                   <th className="px-3 py-2 font-medium">artist_id</th>
-                  <th className="px-3 py-2 font-medium">event_id</th>
                   <th className="px-3 py-2 font-medium">type</th>
                   <th className="px-3 py-2 font-medium">amount</th>
                   <th className="px-3 py-2 font-medium">status</th>
@@ -331,7 +277,6 @@ export default async function AdminTipsPage({
                       {tip.paid_at ? new Date(tip.paid_at).toLocaleString("ja-JP") : "-"}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs">{tip.artist_id}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{tip.event_id}</td>
                     <td className="px-3 py-2">{tip.tip_type}</td>
                     <td className="px-3 py-2 font-semibold">
                       {formatMinorCurrency(tip.amount, tip.currency)}
@@ -349,7 +294,7 @@ export default async function AdminTipsPage({
                 ))}
                 {typedTips.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-6 text-center text-zinc-500" colSpan={7}>
+                    <td className="px-3 py-6 text-center text-zinc-500" colSpan={6}>
                       この月の投げ銭はまだありません。
                     </td>
                   </tr>

@@ -7,21 +7,27 @@ export type PayoutNotificationStatus = "pending" | "notified";
 export type ArtistPayoutStatus = "pending" | "paid";
 
 export const UNCATEGORIZED_TIP_ARTIST_ID = "uncategorized";
-export const UNCATEGORIZED_TIP_EVENT_ID = "uncategorized";
 
 export type TipRow = {
   id: string;
   stripe_checkout_session_id: string;
   stripe_payment_intent_id: string | null;
   artist_id: string;
-  event_id: string;
   tip_type: string;
   amount: number;
   currency: string;
   status: TipStatus;
   paid_at: string | null;
   payout_month: string;
+  stripe_customer_email: string | null;
+  stripe_description: string | null;
+  stripe_metadata: Record<string, string>;
   created_at: string;
+};
+
+export type ArtistCandidate = {
+  display_name: string;
+  id: string;
 };
 
 export type MonthlyArtistPayoutRow = {

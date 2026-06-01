@@ -46,7 +46,6 @@ export async function assignTipArtist(formData: FormData) {
   const tipId = getFormString(formData, "tipId");
   const month = normalizePayoutMonth(getFormString(formData, "month"));
   const artistId = getFormString(formData, "artistId");
-  const eventId = getFormString(formData, "eventId") || "uncategorized";
   const tipType = getFormString(formData, "tipType") || "tip";
 
   if (!tipId) {
@@ -62,7 +61,6 @@ export async function assignTipArtist(formData: FormData) {
     .from("tips")
     .update({
       artist_id: artistId,
-      event_id: eventId,
       tip_type: tipType,
     })
     .eq("id", tipId);
