@@ -132,6 +132,12 @@ export default async function AdminTipsPage({
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
+            <Link
+              href="/admin/artists"
+              className="inline-flex min-h-11 w-full items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold hover:bg-zinc-50 sm:w-auto"
+            >
+              アーティスト管理
+            </Link>
             <form action={importAction}>
               <input type="hidden" name="month" value={displayMonth} />
               <button
