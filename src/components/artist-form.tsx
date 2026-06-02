@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useState } from "react";
+import { useActionState, useState, type KeyboardEvent } from "react";
 import {
   createArtist,
   updateArtist,
@@ -37,7 +37,11 @@ export function ArtistCreateForm({
   const [idEdited, setIdEdited] = useState(Boolean(initialId));
 
   return (
-    <form action={formAction} className="mt-6 grid gap-5 rounded-md border border-zinc-200 bg-white p-5">
+    <form
+      action={formAction}
+      className="mt-6 grid gap-5 rounded-md border border-zinc-200 bg-white p-5"
+      onKeyDown={preventInputEnterSubmit}
+    >
       <div>
         <label className="text-sm font-semibold text-zinc-800" htmlFor="displayName">
           display_name
@@ -95,7 +99,11 @@ export function ArtistEditForm({ artist }: ArtistEditFormProps) {
   );
 
   return (
-    <form action={formAction} className="mt-6 grid gap-5 rounded-md border border-zinc-200 bg-white p-5">
+    <form
+      action={formAction}
+      className="mt-6 grid gap-5 rounded-md border border-zinc-200 bg-white p-5"
+      onKeyDown={preventInputEnterSubmit}
+    >
       <input type="hidden" name="id" value={artist.id} />
 
       <div>
@@ -169,6 +177,18 @@ function ArtistFormError({ error }: { error: string | null }) {
       {error}
     </div>
   );
+}
+
+function preventInputEnterSubmit(event: KeyboardEvent<HTMLFormElement>) {
+  if (event.key !== "Enter") {
+    return;
+  }
+
+  const target = event.target as HTMLElement;
+
+  if (target.tagName === "INPUT") {
+    event.preventDefault();
+  }
 }
 
 function buildIdSuggestion(displayName: string) {

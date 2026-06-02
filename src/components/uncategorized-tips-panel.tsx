@@ -1,6 +1,11 @@
 "use client";
 
-import { useMemo, useState, type ChangeEvent } from "react";
+import {
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from "react";
 import { assignTipArtist } from "@/app/admin/tips/actions";
 import type {
   ArtistCandidate,
@@ -136,7 +141,11 @@ export function UncategorizedTipsPanel({
                   </div>
                 </div>
 
-                <form action={assignTipArtist} className="grid gap-3">
+                <form
+                  action={assignTipArtist}
+                  className="grid gap-3"
+                  onKeyDown={preventInputEnterSubmit}
+                >
                   <input type="hidden" name="tipId" value={tip.id} />
                   <input type="hidden" name="month" value={displayMonth} />
                   <input type="hidden" name="artistId" value={selectedArtistId} />
@@ -183,6 +192,18 @@ function Info({ label, value }: { label: string; value: string }) {
       <p className="mt-1 font-semibold text-amber-950">{value}</p>
     </div>
   );
+}
+
+function preventInputEnterSubmit(event: KeyboardEvent<HTMLFormElement>) {
+  if (event.key !== "Enter") {
+    return;
+  }
+
+  const target = event.target as HTMLElement;
+
+  if (target.tagName === "INPUT") {
+    event.preventDefault();
+  }
 }
 
 function formatDateTime(value: string) {
