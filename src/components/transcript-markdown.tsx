@@ -1053,8 +1053,14 @@ function SegmentEditForm({
         </select>
       </label>
 
+      {/* Web standards do not allow forcing Japanese IME on; these hints keep segment text editing Japanese-input friendly. */}
       <textarea
+        lang="ja"
         name="editedText"
+        inputMode="text"
+        spellCheck={false}
+        autoComplete="off"
+        autoCorrect="off"
         value={textValue}
         onChange={(event) => updateTextValue(event.target.value)}
         rows={Math.min(10, Math.max(4, Math.ceil(textValue.length / 90)))}
