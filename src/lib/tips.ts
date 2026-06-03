@@ -21,6 +21,11 @@ export type TipRow = {
   stripe_customer_email: string | null;
   stripe_description: string | null;
   stripe_metadata: Record<string, string>;
+  stripe_payment_link_id: string | null;
+  stripe_payment_link_metadata: Record<string, string> | null;
+  stripe_payment_link_name: string | null;
+  stripe_payment_link_url: string | null;
+  stripe_product_name: string | null;
   created_at: string;
 };
 

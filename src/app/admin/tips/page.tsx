@@ -6,6 +6,7 @@ import {
   markPayoutNotified,
   markPayoutPaid,
 } from "@/app/admin/tips/actions";
+import { TipArtistAssignmentForm } from "@/components/tip-artist-assignment-form";
 import { UncategorizedTipsPanel } from "@/components/uncategorized-tips-panel";
 import {
   assertCurrentUserIsAdmin,
@@ -47,7 +48,7 @@ export default async function AdminTipsPage({
       supabase
         .from("tips")
         .select(
-          "id, stripe_checkout_session_id, stripe_payment_intent_id, artist_id, tip_type, amount, currency, status, paid_at, payout_month, stripe_description, stripe_customer_email, stripe_metadata, created_at, artists:artists!tips_artist_id_fkey(id, display_name)",
+          "id, stripe_checkout_session_id, stripe_payment_intent_id, artist_id, tip_type, amount, currency, status, paid_at, payout_month, stripe_description, stripe_customer_email, stripe_metadata, stripe_payment_link_id, stripe_payment_link_name, stripe_payment_link_url, stripe_payment_link_metadata, stripe_product_name, created_at, artists:artists!tips_artist_id_fkey(id, display_name)",
         )
         .eq("payout_month", payoutMonth)
         .order("paid_at", { ascending: false }),
@@ -274,16 +275,19 @@ export default async function AdminTipsPage({
         <section className="mt-8">
           <h2 className="text-xl font-semibold">月別投げ銭一覧</h2>
           <div className="mt-4 overflow-x-auto rounded-md border border-zinc-200 bg-white">
-            <table className="w-full min-w-[980px] text-left text-sm">
+            <table className="w-full min-w-[1240px] text-left text-sm">
               <thead className="bg-zinc-50 text-zinc-500">
                 <tr>
                   <th className="px-3 py-2 font-medium">paid_at</th>
                   <th className="px-3 py-2 font-medium">artist_id</th>
                   <th className="px-3 py-2 font-medium">artist</th>
+                  <th className="px-3 py-2 font-medium">link / product</th>
+                  <th className="px-3 py-2 font-medium">metadata</th>
                   <th className="px-3 py-2 font-medium">type</th>
                   <th className="px-3 py-2 font-medium">amount</th>
                   <th className="px-3 py-2 font-medium">status</th>
                   <th className="px-3 py-2 font-medium">stripe ids</th>
+                  <th className="px-3 py-2 font-medium">紐づけ修正</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200">
@@ -294,6 +298,12 @@ export default async function AdminTipsPage({
                     </td>
                     <td className="px-3 py-2 font-mono text-xs">{tip.artist_id || "未分類"}</td>
                     <td className="px-3 py-2">{tip.artists?.display_name || "-"}</td>
+                    <td className="px-3 py-2 text-xs">
+                      <TipPaymentLinkSummary tip={tip} />
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      <TipMetadataSummary tip={tip} />
+                    </td>
                     <td className="px-3 py-2">{tip.tip_type}</td>
                     <td className="px-3 py-2 font-semibold">
                       {formatMinorCurrency(tip.amount, tip.currency)}
@@ -306,12 +316,28 @@ export default async function AdminTipsPage({
                           {tip.stripe_payment_intent_id}
                         </p>
                       ) : null}
+                      {tip.stripe_payment_link_id ? (
+                        <p className="mt-1 break-all font-mono text-xs text-zinc-500">
+                          {tip.stripe_payment_link_id}
+                        </p>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="min-w-56">
+                        <TipArtistAssignmentForm
+                          artists={artistCandidates}
+                          currentArtistName={tip.artists?.display_name}
+                          displayMonth={displayMonth}
+                          tipId={tip.id}
+                          tipType={tip.tip_type}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}
                 {typedTips.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-6 text-center text-zinc-500" colSpan={7}>
+                    <td className="px-3 py-6 text-center text-zinc-500" colSpan={10}>
                       この月の投げ銭はまだありません。
                     </td>
                   </tr>
@@ -322,6 +348,48 @@ export default async function AdminTipsPage({
         </section>
       </section>
     </main>
+  );
+}
+
+function TipPaymentLinkSummary({ tip }: { tip: TipRow }) {
+  const paymentLinkLabel = tip.stripe_payment_link_name || tip.stripe_payment_link_id;
+
+  return (
+    <div className="grid gap-1">
+      <p className="break-all font-semibold text-zinc-900">
+        {paymentLinkLabel || "-"}
+      </p>
+      {tip.stripe_product_name ? (
+        <p className="break-all text-zinc-600">product: {tip.stripe_product_name}</p>
+      ) : null}
+      {tip.stripe_description ? (
+        <p className="break-all text-zinc-600">description: {tip.stripe_description}</p>
+      ) : null}
+      {tip.stripe_customer_email ? (
+        <p className="break-all text-zinc-600">email: {tip.stripe_customer_email}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function TipMetadataSummary({ tip }: { tip: TipRow }) {
+  const paymentLinkArtistId = tip.stripe_payment_link_metadata?.artist_id;
+  const paymentLinkArtistName = tip.stripe_payment_link_metadata?.artist_name;
+  const sessionArtistId = tip.stripe_metadata?.artist_id;
+
+  return (
+    <div className="grid gap-1">
+      {sessionArtistId ? (
+        <p className="break-all">session.artist_id: {sessionArtistId}</p>
+      ) : null}
+      {paymentLinkArtistId ? (
+        <p className="break-all">link.artist_id: {paymentLinkArtistId}</p>
+      ) : null}
+      {paymentLinkArtistName ? (
+        <p className="break-all">link.artist_name: {paymentLinkArtistName}</p>
+      ) : null}
+      {!sessionArtistId && !paymentLinkArtistId && !paymentLinkArtistName ? "-" : null}
+    </div>
   );
 }
 

@@ -57,19 +57,23 @@ async function saveCompletedCheckoutSession(session: Stripe.Checkout.Session) {
     return;
   }
 
-  await upsertTipFromCheckoutSession({
+  const result = await upsertTipFromCheckoutSession({
     session,
     statusOverride: "paid",
     supabase: createAdminSupabaseClient(),
   });
+
+  logStripeTipSyncWarnings(result.warnings);
 }
 
 async function saveFailedCheckoutSession(session: Stripe.Checkout.Session) {
-  await upsertTipFromCheckoutSession({
+  const result = await upsertTipFromCheckoutSession({
     session,
     statusOverride: "failed",
     supabase: createAdminSupabaseClient(),
   });
+
+  logStripeTipSyncWarnings(result.warnings);
 }
 
 async function markPaymentIntentFailed(paymentIntent: Stripe.PaymentIntent) {
@@ -108,4 +112,10 @@ function getStripeId(value: string | Stripe.PaymentIntent | null) {
   }
 
   return typeof value === "string" ? value : value.id;
+}
+
+function logStripeTipSyncWarnings(warnings: string[]) {
+  for (const warning of warnings) {
+    console.warn(`[stripe-tip-sync] ${warning}`);
+  }
 }

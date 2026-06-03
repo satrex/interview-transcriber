@@ -32,10 +32,14 @@ export async function importStripeTipsForMonth(formData: FormData) {
   const payoutMonth = normalizePayoutMonth(getFormString(formData, "month"));
   const supabase = createAdminSupabaseClient();
 
-  await importCheckoutSessionsForMonth({
+  const result = await importCheckoutSessionsForMonth({
     month: payoutMonth,
     supabase,
   });
+
+  for (const warning of result.warnings) {
+    console.warn(`[stripe-tip-sync] ${warning}`);
+  }
 
   revalidatePath(`/admin/tips?month=${payoutMonth.slice(0, 7)}`);
 }
