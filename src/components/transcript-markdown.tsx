@@ -57,6 +57,7 @@ export function TranscriptMarkdown({
 }: TranscriptMarkdownProps) {
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastUnsavedJumpIndexRef = useRef(-1);
+  const skipToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     audioErrorMessage,
     audioRef,
@@ -89,6 +90,13 @@ export function TranscriptMarkdown({
     useState<SegmentEditMap>(segmentEdits);
   const [committedSegmentEditMap, setCommittedSegmentEditMap] =
     useState<SegmentEditMap>(segmentEdits);
+  const [previewSkipPendingIds, setPreviewSkipPendingIds] = useState<
+    Record<string, boolean>
+  >({});
+  const [skipToast, setSkipToast] = useState<{
+    error: string | null;
+    segmentId: string;
+  } | null>(null);
 
   const effectiveSegments = useMemo(
     () => buildEffectiveSegments(segments, effectiveSegmentEditMap),
@@ -175,6 +183,14 @@ export function TranscriptMarkdown({
     };
   }, [unsavedSegmentCount]);
 
+  useEffect(() => {
+    return () => {
+      if (skipToastTimeoutRef.current) {
+        clearTimeout(skipToastTimeoutRef.current);
+      }
+    };
+  }, []);
+
   async function copyMarkdown() {
     try {
       await navigator.clipboard.writeText(markdown);
@@ -228,6 +244,102 @@ export function TranscriptMarkdown({
       ...current,
       [segmentId]: edit,
     }));
+  }
+
+  function updateSegmentSkipState(segmentId: string, isSkipped: boolean) {
+    setEffectiveSegmentEditMap((current) =>
+      setSegmentSkipInEditMap(current, segmentId, isSkipped),
+    );
+    setCommittedSegmentEditMap((current) =>
+      setSegmentSkipInEditMap(current, segmentId, isSkipped),
+    );
+  }
+
+  function setPreviewSkipPending(segmentId: string, isPending: boolean) {
+    setPreviewSkipPendingIds((current) => {
+      if (Boolean(current[segmentId]) === isPending) {
+        return current;
+      }
+
+      const next = { ...current };
+
+      if (isPending) {
+        next[segmentId] = true;
+      } else {
+        delete next[segmentId];
+      }
+
+      return next;
+    });
+  }
+
+  function showSkipToast(segmentId: string, error: string | null = null) {
+    if (skipToastTimeoutRef.current) {
+      clearTimeout(skipToastTimeoutRef.current);
+    }
+
+    setSkipToast({ error, segmentId });
+    skipToastTimeoutRef.current = setTimeout(() => {
+      setSkipToast(null);
+      skipToastTimeoutRef.current = null;
+    }, 5000);
+  }
+
+  async function savePreviewSkipState(segmentId: string, isSkipped: boolean) {
+    const formData = new FormData();
+
+    formData.set("jobId", jobId);
+    formData.set("segmentId", segmentId);
+    formData.set("isSkipped", String(isSkipped));
+
+    return saveSegmentSkip({ error: null, success: false }, formData);
+  }
+
+  async function skipPreviewSegment(segmentId: string) {
+    if (previewSkipPendingIds[segmentId]) {
+      return;
+    }
+
+    setPreviewSkipPending(segmentId, true);
+    updateSegmentSkipState(segmentId, true);
+
+    const result = await savePreviewSkipState(segmentId, true);
+
+    setPreviewSkipPending(segmentId, false);
+
+    if (!result.success) {
+      updateSegmentSkipState(segmentId, false);
+      showSkipToast(segmentId, result.error || "セグメントのスキップに失敗しました。");
+      return;
+    }
+
+    showSkipToast(segmentId);
+  }
+
+  async function undoPreviewSkip(segmentId: string) {
+    if (previewSkipPendingIds[segmentId]) {
+      return;
+    }
+
+    setPreviewSkipPending(segmentId, true);
+    updateSegmentSkipState(segmentId, false);
+
+    const result = await savePreviewSkipState(segmentId, false);
+
+    setPreviewSkipPending(segmentId, false);
+
+    if (!result.success) {
+      updateSegmentSkipState(segmentId, true);
+      showSkipToast(segmentId, result.error || "スキップ解除に失敗しました。");
+      return;
+    }
+
+    if (skipToastTimeoutRef.current) {
+      clearTimeout(skipToastTimeoutRef.current);
+      skipToastTimeoutRef.current = null;
+    }
+
+    setSkipToast(null);
   }
 
   function jumpToSegment(segmentId: string, target: "edit" | "preview") {
@@ -436,7 +548,7 @@ export function TranscriptMarkdown({
                   <span
                     key={segment.id}
                     id={getSegmentPreviewDomId(segment.id)}
-                    className={`scroll-mt-6 rounded-sm transition ${
+                    className={`group/preview-segment relative inline scroll-mt-6 rounded-sm pr-7 transition ${
                       activeReturnHighlightSegmentId === segment.id ||
                       highlightedPreviewSegmentId === segment.id
                         ? "bg-amber-100 ring-2 ring-amber-300"
@@ -458,6 +570,20 @@ export function TranscriptMarkdown({
                         {" "}
                       </a>
                     ))}
+                    <button
+                      type="button"
+                      aria-label="このセグメントをスキップ"
+                      title="このセグメントをスキップ"
+                      disabled={Boolean(previewSkipPendingIds[segment.id])}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void skipPreviewSegment(segment.id);
+                      }}
+                      className="absolute right-0 top-0 inline-flex size-5 items-center justify-center rounded-full border border-zinc-200 bg-white/95 text-xs font-semibold leading-none text-zinc-400 opacity-0 shadow-sm transition hover:border-red-200 hover:text-red-600 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:cursor-not-allowed disabled:text-zinc-300 group-hover/preview-segment:opacity-100 group-focus-within/preview-segment:opacity-100"
+                    >
+                      x
+                    </button>
                     {" "}
                   </span>
                 ))}
@@ -467,13 +593,35 @@ export function TranscriptMarkdown({
         ))}
       </div>
 
+      {skipToast ? (
+        <div
+          className="fixed bottom-5 left-1/2 z-50 flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 items-center justify-between gap-3 rounded-md border border-zinc-200 bg-zinc-950 px-4 py-3 text-sm text-white shadow-lg"
+          role="status"
+          aria-live="polite"
+        >
+          <span>
+            {skipToast.error || "セグメントをスキップしました"}
+          </span>
+          {skipToast.error ? null : (
+            <button
+              type="button"
+              onClick={() => void undoPreviewSkip(skipToast.segmentId)}
+              disabled={Boolean(previewSkipPendingIds[skipToast.segmentId])}
+              className="shrink-0 rounded-sm px-2 py-1 text-sm font-semibold text-white underline decoration-white/50 underline-offset-4 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:text-white/50"
+            >
+              元に戻す
+            </button>
+          )}
+        </div>
+      ) : null}
+
       <div className="mt-8 space-y-3">
         {segments.map((segment) => {
           const edit = effectiveSegmentEditMap[segment.id];
 
           return (
             <SegmentEditForm
-              key={segment.id}
+              key={`${segment.id}-${Boolean(edit?.isSkipped)}`}
               edit={edit}
               playbackStatus={
                 playbackState?.segmentId === segment.id
@@ -1321,6 +1469,28 @@ function buildEffectiveSegments(
       },
     ];
   });
+}
+
+function setSegmentSkipInEditMap(
+  segmentEdits: SegmentEditMap,
+  segmentId: string,
+  isSkipped: boolean,
+) {
+  const currentEdit = segmentEdits[segmentId];
+  const nextEdit: SegmentEdit = {
+    editedText: currentEdit?.editedText ?? null,
+    speakerOverride: currentEdit?.speakerOverride ?? null,
+    isSkipped,
+  };
+  const nextSegmentEdits = { ...segmentEdits };
+
+  if (!nextEdit.editedText && !nextEdit.speakerOverride && !nextEdit.isSkipped) {
+    delete nextSegmentEdits[segmentId];
+  } else {
+    nextSegmentEdits[segmentId] = nextEdit;
+  }
+
+  return nextSegmentEdits;
 }
 
 function buildSpeakerLabelOptions(
