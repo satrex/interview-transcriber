@@ -38,6 +38,7 @@ type JobDetailRow = {
   id: string;
   original_filename: string;
   progress: number;
+  project_id: string | null;
   skipped_segments_count: number | null;
   status: "queued" | "processing" | "completed" | "failed";
   storage_bucket: string;
@@ -46,10 +47,10 @@ type JobDetailRow = {
 };
 
 const JOB_DETAIL_SELECT_WITH_CHUNKS =
-  "id, original_filename, status, progress, audio_duration_sec, audio_chunk_duration_sec, skipped_segments_count, error_code, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at";
+  "id, project_id, original_filename, status, progress, audio_duration_sec, audio_chunk_duration_sec, skipped_segments_count, error_code, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at";
 
 const JOB_DETAIL_SELECT_BASE =
-  "id, original_filename, status, progress, audio_duration_sec, skipped_segments_count, error_code, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at";
+  "id, project_id, original_filename, status, progress, audio_duration_sec, skipped_segments_count, error_code, error_message, storage_bucket, storage_path, expected_speaker_count, created_at, updated_at";
 
 export default async function JobDetailPage({ params }: JobDetailPageProps) {
   const { jobId } = await params;
@@ -200,11 +201,17 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
   }
   const shouldExpandSystemDetails =
     job.status === "processing" || job.status === "failed";
+  const projectHref = job.project_id
+    ? `/projects/${job.project_id}`
+    : "/projects";
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-3xl px-6 py-12">
-      <Link className="text-sm font-medium text-zinc-600 hover:text-zinc-950" href="/jobs">
-        ← プロジェクト一覧へ戻る
+      <Link
+        className="text-sm font-medium text-zinc-600 hover:text-zinc-950"
+        href={projectHref}
+      >
+        ← プロジェクトに戻る
       </Link>
 
       <section className="mt-8 rounded-md border border-zinc-200 bg-white p-8 shadow-sm">
@@ -448,9 +455,9 @@ function JobAccessIssue({
         </p>
         <Link
           className="mt-6 inline-block text-sm font-semibold text-amber-950"
-          href="/jobs"
+          href="/projects"
         >
-          プロジェクト一覧へ戻る
+          プロジェクトに戻る
         </Link>
       </section>
     </main>
