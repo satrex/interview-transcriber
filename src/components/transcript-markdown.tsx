@@ -548,7 +548,7 @@ export function TranscriptMarkdown({
                   <span
                     key={segment.id}
                     id={getSegmentPreviewDomId(segment.id)}
-                    className={`group/preview-segment relative inline scroll-mt-6 rounded-sm pr-7 transition ${
+                    className={`group/preview-segment relative inline scroll-mt-6 rounded-sm transition ${
                       activeReturnHighlightSegmentId === segment.id ||
                       highlightedPreviewSegmentId === segment.id
                         ? "bg-amber-100 ring-2 ring-amber-300"
@@ -580,7 +580,7 @@ export function TranscriptMarkdown({
                         event.stopPropagation();
                         void skipPreviewSegment(segment.id);
                       }}
-                      className="absolute right-0 top-0 inline-flex size-5 items-center justify-center rounded-full border border-zinc-200 bg-white/95 text-xs font-semibold leading-none text-zinc-400 opacity-0 shadow-sm transition hover:border-red-200 hover:text-red-600 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:cursor-not-allowed disabled:text-zinc-300 group-hover/preview-segment:opacity-100 group-focus-within/preview-segment:opacity-100"
+                      className="absolute right-0 top-0 z-10 inline-flex size-5 items-center justify-center rounded-full border border-zinc-200 bg-white/95 text-xs font-semibold leading-none text-zinc-400 opacity-0 shadow-sm transition hover:border-red-200 hover:text-red-600 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:cursor-not-allowed disabled:text-zinc-300 group-hover/preview-segment:opacity-100 group-focus-within/preview-segment:opacity-100"
                     >
                       x
                     </button>
