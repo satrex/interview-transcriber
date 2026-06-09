@@ -26,6 +26,8 @@ Relevant environment variables:
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `MAX_UPLOAD_SIZE_MB` defaults to `1024`
+- `OPENAI_API_KEY` for punctuation post-processing
+- `OPENAI_PUNCTUATION_MODEL` for the text model used by punctuation post-processing
 
 Audio uploads use the private Supabase Storage bucket `audio`. Keep any legacy
 `SUPABASE_AUDIO_BUCKET` / `NEXT_PUBLIC_SUPABASE_AUDIO_BUCKET` values unset or

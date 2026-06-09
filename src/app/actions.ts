@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { punctuateJapaneseSegments } from "@/lib/punctuation";
 import {
   getAudioBucketName,
   validateAudioFileMetadata,
@@ -14,6 +15,10 @@ import {
   parseAliases,
   parseDictionaryYaml,
 } from "@/lib/term-dictionaries";
+import {
+  fetchAllSegmentEdits,
+  fetchAllSegments,
+} from "@/lib/transcript-segments";
 
 export type CreateProjectActionInput = {
   projectId: string;
@@ -82,6 +87,19 @@ export type SegmentSpeakerActionState = {
 export type SegmentSaveMetrics = {
   dbElapsedMs: number;
   serverElapsedMs: number;
+};
+
+export type PunctuateProjectSegmentsActionResult = {
+  error: string | null;
+  hasMore: boolean;
+  noTargets: boolean;
+  processedCount: number;
+  remainingCount: number;
+  savedSegments: Array<{
+    editedText: string;
+    segmentId: string;
+  }>;
+  success: boolean;
 };
 
 export type DeleteJobActionState = {
@@ -1222,6 +1240,196 @@ export async function saveExpectedSpeakerCount(
   } catch (error) {
     const message = error instanceof Error ? error.message : "不明なエラーが発生しました。";
     return { error: message, success: false };
+  }
+}
+
+const PUNCTUATION_BATCH_SIZE = 20;
+
+export async function punctuateProjectSegments(input: {
+  jobId: string;
+  projectId?: string | null;
+}): Promise<PunctuateProjectSegmentsActionResult> {
+  const emptyResult: PunctuateProjectSegmentsActionResult = {
+    error: null,
+    hasMore: false,
+    noTargets: false,
+    processedCount: 0,
+    remainingCount: 0,
+    savedSegments: [],
+    success: false,
+  };
+
+  if (
+    !isUuid(input.jobId) ||
+    (input.projectId !== undefined &&
+      input.projectId !== null &&
+      !isUuid(input.projectId))
+  ) {
+    return {
+      ...emptyResult,
+      error: "プロジェクトまたはジョブの指定が正しくありません。",
+    };
+  }
+
+  try {
+    const supabase = await createServerSupabaseClient();
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return { ...emptyResult, error: "ログインが必要です。" };
+    }
+
+    const { data: currentJob, error: currentJobError } = await supabase
+      .from("transcription_jobs")
+      .select("id, project_id")
+      .eq("id", input.jobId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (currentJobError || !currentJob) {
+      return { ...emptyResult, error: "ジョブが見つかりません。" };
+    }
+
+    if (
+      input.projectId &&
+      String(currentJob.project_id || "") !== input.projectId
+    ) {
+      return {
+        ...emptyResult,
+        error: "ジョブとプロジェクトの組み合わせが一致しません。",
+      };
+    }
+
+    const projectId = input.projectId || currentJob.project_id || null;
+    let jobIds = [String(currentJob.id)];
+
+    if (projectId) {
+      const { data: project, error: projectError } = await supabase
+        .from("transcription_projects")
+        .select("id")
+        .eq("id", projectId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (projectError || !project) {
+        return { ...emptyResult, error: "プロジェクトが見つかりません。" };
+      }
+
+      const { data: projectJobs, error: projectJobsError } = await supabase
+        .from("transcription_jobs")
+        .select("id, part_index")
+        .eq("project_id", projectId)
+        .eq("user_id", user.id)
+        .eq("is_project_part", true)
+        .order("part_index", { ascending: true });
+
+      if (projectJobsError) {
+        return {
+          ...emptyResult,
+          error: `プロジェクトのパート取得に失敗しました: ${projectJobsError.message}`,
+        };
+      }
+
+      jobIds = (projectJobs || []).map((job) => String(job.id));
+    }
+
+    const candidates: Array<{
+      jobId: string;
+      segmentId: string;
+      text: string;
+    }> = [];
+
+    for (const jobId of jobIds) {
+      const [segments, segmentEdits] = await Promise.all([
+        fetchAllSegments(jobId, { supabase }),
+        fetchAllSegmentEdits(jobId, { supabase }),
+      ]);
+
+      for (const segment of segments) {
+        const edit = segmentEdits[segment.id];
+
+        if (edit?.isSkipped || edit?.editedText || !segment.text.trim()) {
+          continue;
+        }
+
+        candidates.push({
+          jobId,
+          segmentId: segment.id,
+          text: segment.text,
+        });
+      }
+    }
+
+    if (candidates.length === 0) {
+      return {
+        ...emptyResult,
+        noTargets: true,
+        success: true,
+      };
+    }
+
+    const batch = candidates.slice(0, PUNCTUATION_BATCH_SIZE);
+    const punctuated = await punctuateJapaneseSegments(
+      batch.map((segment) => ({
+        segmentId: segment.segmentId,
+        text: segment.text,
+      })),
+    );
+    const batchBySegmentId = new Map(
+      batch.map((segment) => [segment.segmentId, segment]),
+    );
+    const { data: savedRows, error: saveError } = await supabase.rpc(
+      "save_punctuated_segment_edits",
+      {
+        p_edits: punctuated.map((result) => ({
+          edited_text: result.editedText,
+          job_id: batchBySegmentId.get(result.segmentId)?.jobId,
+          segment_id: result.segmentId,
+        })),
+      },
+    );
+
+    if (saveError) {
+      return {
+        ...emptyResult,
+        error: `句読点補正結果の保存に失敗しました: ${saveError.message}`,
+      };
+    }
+
+    const savedSegments = ((savedRows || []) as Array<{
+      edited_text: unknown;
+      segment_id: unknown;
+    }>).map((row) => ({
+      editedText: String(row.edited_text),
+      segmentId: String(row.segment_id),
+    }));
+
+    revalidatePath(`/jobs/${input.jobId}`);
+
+    if (projectId) {
+      revalidatePath(`/projects/${projectId}`);
+    }
+
+    return {
+      error: null,
+      hasMore: candidates.length > batch.length,
+      noTargets: false,
+      processedCount: batch.length,
+      remainingCount: Math.max(0, candidates.length - batch.length),
+      savedSegments,
+      success: true,
+    };
+  } catch (error) {
+    return {
+      ...emptyResult,
+      error:
+        error instanceof Error
+          ? error.message
+          : "句読点補正中に不明なエラーが発生しました。",
+    };
   }
 }
 

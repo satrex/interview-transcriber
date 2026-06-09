@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import {
+  punctuateProjectSegments,
   saveSegmentEdit,
   saveSegmentSpeaker,
   saveSegmentSkip,
@@ -38,6 +39,7 @@ export type TranscriptMarkdownProps = {
   exportBaseName?: string;
   jobId: string;
   onSpeakerLabelClick?: (segmentId: string, speakerLabel: string) => void;
+  projectId?: string | null;
   segmentEdits?: SegmentEditMap;
   segments: TranscriptSegment[];
   speakerNames?: SpeakerNameMap;
@@ -51,12 +53,16 @@ export function TranscriptMarkdown({
   exportBaseName = "transcript",
   jobId,
   onSpeakerLabelClick,
+  projectId = null,
   segmentEdits = {},
   segments,
   speakerNames = {},
 }: TranscriptMarkdownProps) {
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastUnsavedJumpIndexRef = useRef(-1);
+  const punctuationToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const skipToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     audioErrorMessage,
@@ -97,6 +103,18 @@ export function TranscriptMarkdown({
     error: string | null;
     segmentId: string;
   } | null>(null);
+  const [isPunctuating, setIsPunctuating] = useState(false);
+  const [punctuationProgress, setPunctuationProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
+  const [punctuationToast, setPunctuationToast] = useState<{
+    error: boolean;
+    message: string;
+  } | null>(null);
+  const [segmentFormRevisions, setSegmentFormRevisions] = useState<
+    Record<string, number>
+  >({});
 
   const effectiveSegments = useMemo(
     () => buildEffectiveSegments(segments, effectiveSegmentEditMap),
@@ -187,6 +205,9 @@ export function TranscriptMarkdown({
     return () => {
       if (skipToastTimeoutRef.current) {
         clearTimeout(skipToastTimeoutRef.current);
+      }
+      if (punctuationToastTimeoutRef.current) {
+        clearTimeout(punctuationToastTimeoutRef.current);
       }
     };
   }, []);
@@ -283,6 +304,122 @@ export function TranscriptMarkdown({
       setSkipToast(null);
       skipToastTimeoutRef.current = null;
     }, 5000);
+  }
+
+  function showPunctuationToast(message: string, error = false) {
+    if (punctuationToastTimeoutRef.current) {
+      clearTimeout(punctuationToastTimeoutRef.current);
+    }
+
+    setPunctuationToast({ error, message });
+    punctuationToastTimeoutRef.current = setTimeout(() => {
+      setPunctuationToast(null);
+      punctuationToastTimeoutRef.current = null;
+    }, 5000);
+  }
+
+  async function punctuateSegments() {
+    if (isPunctuating) {
+      return;
+    }
+
+    if (unsavedSegmentCount > 0) {
+      showPunctuationToast(
+        "未保存の本文編集を保存してから句読点を整えてください。",
+        true,
+      );
+      return;
+    }
+
+    setIsPunctuating(true);
+    setPunctuationProgress(null);
+    setPunctuationToast(null);
+
+    let completed = 0;
+    let total = 0;
+    let savedCount = 0;
+
+    try {
+      while (true) {
+        const result = await punctuateProjectSegments({ jobId, projectId });
+
+        if (!result.success) {
+          throw new Error(
+            result.error || "句読点補正処理に失敗しました。",
+          );
+        }
+
+        if (result.noTargets) {
+          if (completed === 0) {
+            showPunctuationToast(
+              "整形できる未編集セグメントがありません",
+            );
+          }
+          break;
+        }
+
+        if (total === 0) {
+          total = result.processedCount + result.remainingCount;
+        }
+
+        completed += result.processedCount;
+        savedCount += result.savedSegments.length;
+        setPunctuationProgress({ completed, total });
+
+        if (result.savedSegments.length > 0) {
+          const savedBySegmentId = new Map(
+            result.savedSegments.map((segment) => [
+              segment.segmentId,
+              segment.editedText,
+            ]),
+          );
+          const applySavedText = (current: SegmentEditMap) => {
+            const next = { ...current };
+
+            for (const [segmentId, editedText] of savedBySegmentId) {
+              const currentEdit = current[segmentId];
+
+              next[segmentId] = {
+                editedText,
+                isSkipped: currentEdit?.isSkipped || false,
+                speakerOverride: currentEdit?.speakerOverride || null,
+              };
+            }
+
+            return next;
+          };
+
+          setEffectiveSegmentEditMap(applySavedText);
+          setCommittedSegmentEditMap(applySavedText);
+          setSegmentFormRevisions((current) => {
+            const next = { ...current };
+
+            for (const segmentId of savedBySegmentId.keys()) {
+              next[segmentId] = (next[segmentId] || 0) + 1;
+            }
+
+            return next;
+          });
+        }
+
+        if (!result.hasMore) {
+          break;
+        }
+      }
+
+      if (completed > 0 || savedCount > 0) {
+        showPunctuationToast("句読点を整えました");
+      }
+    } catch (error) {
+      showPunctuationToast(
+        error instanceof Error
+          ? error.message
+          : "句読点補正処理に失敗しました。",
+        true,
+      );
+    } finally {
+      setIsPunctuating(false);
+    }
   }
 
   async function savePreviewSkipState(segmentId: string, isSkipped: boolean) {
@@ -426,6 +563,18 @@ export function TranscriptMarkdown({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void punctuateSegments()}
+            disabled={isPunctuating}
+            className="inline-flex min-h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500"
+          >
+            {isPunctuating
+              ? punctuationProgress
+                ? `句読点を整えています... ${punctuationProgress.completed} / ${punctuationProgress.total}`
+                : "句読点を整えています..."
+              : "句読点を整える"}
+          </button>
           <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
             <input
               type="checkbox"
@@ -615,13 +764,29 @@ export function TranscriptMarkdown({
         </div>
       ) : null}
 
+      {punctuationToast ? (
+        <div
+          className={`fixed bottom-20 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 rounded-md border px-4 py-3 text-sm shadow-lg ${
+            punctuationToast.error
+              ? "border-red-200 bg-red-950 text-white"
+              : "border-zinc-200 bg-zinc-950 text-white"
+          }`}
+          role={punctuationToast.error ? "alert" : "status"}
+          aria-live="polite"
+        >
+          {punctuationToast.message}
+        </div>
+      ) : null}
+
       <div className="mt-8 space-y-3">
         {segments.map((segment) => {
           const edit = effectiveSegmentEditMap[segment.id];
 
           return (
             <SegmentEditForm
-              key={`${segment.id}-${Boolean(edit?.isSkipped)}`}
+              key={`${segment.id}-${Boolean(edit?.isSkipped)}-${
+                segmentFormRevisions[segment.id] || 0
+              }`}
               edit={edit}
               playbackStatus={
                 playbackState?.segmentId === segment.id

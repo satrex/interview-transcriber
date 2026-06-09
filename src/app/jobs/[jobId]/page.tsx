@@ -328,6 +328,7 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
           audioLoadError={audioChunkDurationSec ? null : audioLoadError}
           exportBaseName={job.original_filename}
           jobId={job.id}
+          projectId={job.project_id}
           segmentEdits={segmentEdits}
           segments={segments}
           speakerNames={speakerNames}

@@ -17,6 +17,7 @@ type InterviewEditorProps = SpeakerAnalysisPanelProps &
     | "audioLoadError"
     | "audioUrl"
     | "exportBaseName"
+    | "projectId"
     | "segmentEdits"
     | "segments"
     | "speakerNames"
@@ -29,6 +30,7 @@ export function InterviewEditor({
   audioUrl,
   exportBaseName,
   jobId,
+  projectId,
   segmentEdits,
   segments,
   speakerNames,
@@ -119,6 +121,7 @@ export function InterviewEditor({
         exportBaseName={exportBaseName}
         jobId={jobId}
         onSpeakerLabelClick={handleSpeakerLabelClick}
+        projectId={projectId}
         segmentEdits={segmentEdits}
         segments={segments}
         speakerNames={speakerNames}
