@@ -53,6 +53,25 @@ export class FinalJobFailure extends Error {
   }
 }
 
+export class RetryableJobFailure extends Error {
+  readonly errorCode: string;
+  readonly processedAudioSeconds: number | null;
+
+  constructor(
+    message: string,
+    options: {
+      cause?: unknown;
+      errorCode: string;
+      processedAudioSeconds: number | null;
+    },
+  ) {
+    super(message, { cause: options.cause });
+    this.name = "RetryableJobFailure";
+    this.errorCode = options.errorCode;
+    this.processedAudioSeconds = options.processedAudioSeconds;
+  }
+}
+
 export async function processJob(
   supabase: SupabaseClient,
   config: WorkerConfig,
@@ -68,14 +87,23 @@ export async function processJob(
 
   try {
     console.log(`[worker] downloading job ${job.id}: ${job.storage_path}`);
-    const downloaded = await downloadJobAudio(supabase, job, config.tmpDir);
+    const downloaded = await downloadJobAudio(
+      supabase,
+      job,
+      config.tmpDir,
+      config.downloadTimeoutSeconds,
+    );
     jobTmpDir = downloaded.jobTmpDir;
 
     console.log(
       `[worker] downloaded ${downloaded.bytes} bytes to ${downloaded.localPath}`,
     );
 
-    const audioInfo = await probeAudio(config.ffprobePath, downloaded.localPath);
+    const audioInfo = await probeAudio(
+      config.ffprobePath,
+      downloaded.localPath,
+      config.ffmpegTimeoutSeconds * 1000,
+    );
     audioDurationSec = audioInfo.durationSec;
 
     console.log("[worker] ffprobe audio info:");
@@ -92,6 +120,7 @@ export async function processJob(
       outputDir: `${downloaded.jobTmpDir}/chunks`,
       jobId: job.id,
       chunkSeconds: config.audioChunkSeconds,
+      timeoutMs: config.ffmpegTimeoutSeconds * 1000,
     });
 
     if (chunks.length === 0) {
@@ -118,7 +147,10 @@ export async function processJob(
       );
     }
 
-    const openai = createOpenAIClient(config.openaiApiKey);
+    const openai = createOpenAIClient(
+      config.openaiApiKey,
+      config.openaiTranscriptionTimeoutSeconds,
+    );
     const termDictionaryPrompt = await loadTermDictionaryPrompt(supabase, job);
     if (termDictionaryPrompt) {
       console.warn(
@@ -209,7 +241,13 @@ export async function processJob(
     }
   } catch (error) {
     if (error instanceof OpenAITranscriptionError) {
-      throw new FinalJobFailure(error.message, {
+      const FailureClass =
+        error.errorCode === "quota_exceeded" ||
+        error.errorCode === "unsupported_prompt_for_diarization"
+          ? FinalJobFailure
+          : RetryableJobFailure;
+
+      throw new FailureClass(error.message, {
         cause: error,
         errorCode: error.errorCode,
         processedAudioSeconds,

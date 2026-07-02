@@ -42,10 +42,13 @@ WORKER_POLL_INTERVAL_MS=10000
 WORKER_TMP_DIR=/tmp/interview-transcriber
 FFMPEG_PATH=ffmpeg
 FFPROBE_PATH=ffprobe
+FFMPEG_TIMEOUT_SECONDS=1800
 AUDIO_CHUNK_SECONDS=600
+WORKER_DOWNLOAD_TIMEOUT_SECONDS=900
 
 OPENAI_API_KEY=
 OPENAI_TRANSCRIPTION_MODEL=gpt-4o-transcribe-diarize
+OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS=1200
 ```
 
 Use the Supabase service role key only on the VPS. Do not expose it to the browser.
@@ -63,13 +66,17 @@ The worker stays running and polls for claimable jobs every `WORKER_POLL_INTERVA
 
 Job claiming is handled by the Supabase RPC function `claim_next_transcription_job`. It uses row locking so multiple workers do not claim the same job at the same time. Keep `MAX_CONCURRENT_JOBS=1`; parallel job and parallel chunk processing are intentionally not enabled yet. A `processing` job whose `locked_at` is older than `WORKER_LOCK_TIMEOUT_MINUTES` can be claimed again until `WORKER_MAX_ATTEMPTS` is reached. While a worker is active, it refreshes `locked_at` periodically so a long-running job is not treated as stale. Transient Supabase communication failures are retried with exponential backoff; heartbeat refresh failures only stop the job after `WORKER_MAX_LOCK_REFRESH_FAILURES` consecutive failed refresh operations.
 
-OpenAI transcription API failures are classified separately from job attempts:
+OpenAI transcription API failures are classified separately from job attempts. The OpenAI SDK's internal retries are disabled so the worker controls retry timing:
 
 - `quota_exceeded`: billing/quota 429, including `insufficient_quota`, is not retried. The job is marked `failed`.
-- `rate_limited`: non-quota 429 is retried inside the chunk call after 30 seconds and 60 seconds. If it still fails, the job is marked `failed`.
-- `openai_error`: other OpenAI API errors are retried inside the chunk call up to 3 times, then the job is marked `failed`.
+- `unsupported_prompt_for_diarization`: an incompatible prompt/model request is not retried. The job is marked `failed`.
+- `openai_timeout`: a timed-out chunk is retried once after 5 seconds, then the job is requeued.
+- `rate_limited`: non-quota 429 is retried inside the chunk call after 30 seconds and 60 seconds, then the job is requeued.
+- `openai_error`: other OpenAI API errors are retried inside the chunk call up to 3 times, then the job is requeued.
 
-`attempt_count` means the number of times a worker claimed the job. Chunk-level OpenAI retries do not increment it.
+Requeued OpenAI failures are attempted up to `WORKER_MAX_ATTEMPTS`; the final failed job retains its specific `error_code`. `attempt_count` means the number of times a worker claimed the job. Chunk-level OpenAI retries do not increment it.
+
+If transcription still exceeds `OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS=1200` on the target VPS, reduce `AUDIO_CHUNK_SECONDS` to `300` so each request contains five minutes of audio.
 
 Chunk files are written under the job temporary directory with names like:
 

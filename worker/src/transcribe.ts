@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import OpenAI from "openai";
+import OpenAI, { APIConnectionTimeoutError } from "openai";
 import type { TranscriptionCreateParamsNonStreaming } from "openai/resources/audio/transcriptions";
 import type { AudioChunk } from "./ffmpeg.js";
 import { formatErrorMessage } from "./retry.js";
@@ -31,6 +31,7 @@ export type OpenAITranscriptionErrorCode =
   | "quota_exceeded"
   | "rate_limited"
   | "unsupported_prompt_for_diarization"
+  | "openai_timeout"
   | "openai_error";
 
 export class OpenAITranscriptionError extends Error {
@@ -58,8 +59,12 @@ type DiarizedTranscriptionResponse = {
   }>;
 };
 
-export function createOpenAIClient(apiKey: string) {
-  return new OpenAI({ apiKey });
+export function createOpenAIClient(apiKey: string, timeoutSeconds: number) {
+  return new OpenAI({
+    apiKey,
+    timeout: timeoutSeconds * 1000,
+    maxRetries: 0,
+  });
 }
 
 export async function transcribeChunk(options: {
@@ -194,6 +199,18 @@ function classifyOpenAITranscriptionError(error: unknown): {
       errorCode: "unsupported_prompt_for_diarization",
       maxAttempts: 1,
       retryable: false,
+    };
+  }
+
+  if (
+    error instanceof APIConnectionTimeoutError ||
+    message.includes("request timed out")
+  ) {
+    return {
+      delayMs: () => 5_000,
+      errorCode: "openai_timeout",
+      maxAttempts: 2,
+      retryable: true,
     };
   }
 

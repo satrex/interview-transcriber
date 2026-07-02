@@ -38,9 +38,11 @@ export async function retryTransientOperation<T>(
 
 export function isTransientError(error: unknown) {
   const message = formatErrorMessage(error).toLowerCase();
+  const errorName = error instanceof Error ? error.name : "";
 
   return (
     error instanceof TypeError ||
+    errorName === "TimeoutError" ||
     message.includes("fetch failed") ||
     message.includes("connection error") ||
     message.includes("network") ||

@@ -1,7 +1,12 @@
 import { loadConfig } from "./config.js";
 import { claimQueuedJob, markJobAttemptFailed } from "./jobs.js";
 import { processProject, claimQueuedProject, updateProjectProgress } from "./projects.js";
-import { FinalJobFailure, PermanentJobFailure, processJob } from "./processor.js";
+import {
+  FinalJobFailure,
+  PermanentJobFailure,
+  processJob,
+  RetryableJobFailure,
+} from "./processor.js";
 import { isTransientError } from "./retry.js";
 import { createSupabaseClient } from "./supabase.js";
 import type { TranscriptionJob, TranscriptionProject } from "./supabase.js";
@@ -162,6 +167,8 @@ async function processClaimedJob(
       ? "Supabase communication"
       : error instanceof FinalJobFailure
         ? error.errorCode
+      : error instanceof RetryableJobFailure
+        ? error.errorCode
       : error instanceof PermanentJobFailure
         ? "permanent job"
         : "processing";
@@ -173,11 +180,15 @@ async function processClaimedJob(
       : config.maxAttempts;
     await markJobAttemptFailed(supabase, job, message, maxAttempts, {
       errorCode:
-        error instanceof FinalJobFailure || error instanceof PermanentJobFailure
+        error instanceof FinalJobFailure ||
+        error instanceof RetryableJobFailure ||
+        error instanceof PermanentJobFailure
           ? error.errorCode
           : undefined,
       processedAudioSeconds:
-        error instanceof FinalJobFailure || error instanceof PermanentJobFailure
+        error instanceof FinalJobFailure ||
+        error instanceof RetryableJobFailure ||
+        error instanceof PermanentJobFailure
           ? error.processedAudioSeconds
           : undefined,
     });

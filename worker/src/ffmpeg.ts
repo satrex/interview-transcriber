@@ -17,6 +17,7 @@ export async function splitAudioIntoChunks(options: {
   outputDir: string;
   jobId: string;
   chunkSeconds: number;
+  timeoutMs: number;
 }) {
   await mkdir(options.outputDir, { recursive: true });
 
@@ -25,32 +26,36 @@ export async function splitAudioIntoChunks(options: {
     `${options.jobId}_chunk_%03d.wav`,
   );
 
-  await execFileAsync(options.ffmpegPath, [
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-y",
-    "-i",
-    options.inputPath,
-    "-vn",
-    "-map",
-    "0:a:0",
-    "-ac",
-    "1",
-    "-ar",
-    "16000",
-    "-c:a",
-    "pcm_s16le",
-    "-f",
-    "segment",
-    "-segment_time",
-    String(options.chunkSeconds),
-    "-segment_start_number",
-    "0",
-    "-reset_timestamps",
-    "1",
-    outputPattern,
-  ]);
+  await execFileAsync(
+    options.ffmpegPath,
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      options.inputPath,
+      "-vn",
+      "-map",
+      "0:a:0",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-c:a",
+      "pcm_s16le",
+      "-f",
+      "segment",
+      "-segment_time",
+      String(options.chunkSeconds),
+      "-segment_start_number",
+      "0",
+      "-reset_timestamps",
+      "1",
+      outputPattern,
+    ],
+    { timeout: options.timeoutMs, killSignal: "SIGKILL" },
+  );
 
   const files = await readdir(options.outputDir);
   const chunks = await Promise.all(

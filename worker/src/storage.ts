@@ -17,6 +17,7 @@ export async function downloadJobAudio(
   supabase: SupabaseClient,
   job: TranscriptionJob | StorageDownloadable,
   tmpDir: string,
+  downloadTimeoutSeconds: number,
 ) {
   const jobTmpDir = join(tmpDir, job.id);
   await mkdir(jobTmpDir, { recursive: true });
@@ -27,7 +28,10 @@ export async function downloadJobAudio(
   const signedUrl = await createSourceAudioSignedUrl(supabase, job);
   const response = await retryTransientOperation(
     { operation: `fetch source audio for job ${job.id}` },
-    () => fetch(signedUrl),
+    () =>
+      fetch(signedUrl, {
+        signal: AbortSignal.timeout(downloadTimeoutSeconds * 1000),
+      }),
   );
 
   if (!response.ok) {

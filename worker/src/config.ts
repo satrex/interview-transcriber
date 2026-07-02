@@ -10,6 +10,9 @@ export type WorkerConfig = {
   audioChunkSeconds: number;
   openaiApiKey: string;
   openaiTranscriptionModel: string;
+  openaiTranscriptionTimeoutSeconds: number;
+  ffmpegTimeoutSeconds: number;
+  downloadTimeoutSeconds: number;
   maxConcurrentJobs: number;
   lockTimeoutMinutes: number;
   maxLockRefreshFailures: number;
@@ -33,6 +36,21 @@ export function loadConfig(): WorkerConfig {
     openaiApiKey: requireEnv("OPENAI_API_KEY"),
     openaiTranscriptionModel:
       process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-transcribe-diarize",
+    openaiTranscriptionTimeoutSeconds: parsePositiveInteger(
+      process.env.OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS,
+      1200,
+      "OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS",
+    ),
+    ffmpegTimeoutSeconds: parsePositiveInteger(
+      process.env.FFMPEG_TIMEOUT_SECONDS,
+      1800,
+      "FFMPEG_TIMEOUT_SECONDS",
+    ),
+    downloadTimeoutSeconds: parsePositiveInteger(
+      process.env.WORKER_DOWNLOAD_TIMEOUT_SECONDS,
+      900,
+      "WORKER_DOWNLOAD_TIMEOUT_SECONDS",
+    ),
     maxConcurrentJobs: parseMaxConcurrentJobs(process.env.MAX_CONCURRENT_JOBS),
     lockTimeoutMinutes: parsePositiveInteger(
       process.env.WORKER_LOCK_TIMEOUT_MINUTES,

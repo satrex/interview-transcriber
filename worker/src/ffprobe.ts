@@ -29,16 +29,24 @@ type FfprobeOutput = {
   }>;
 };
 
-export async function probeAudio(ffprobePath: string, localPath: string) {
-  const { stdout } = await execFileAsync(ffprobePath, [
-    "-v",
-    "error",
-    "-show_format",
-    "-show_streams",
-    "-of",
-    "json",
-    localPath,
-  ]);
+export async function probeAudio(
+  ffprobePath: string,
+  localPath: string,
+  timeoutMs: number,
+) {
+  const { stdout } = await execFileAsync(
+    ffprobePath,
+    [
+      "-v",
+      "error",
+      "-show_format",
+      "-show_streams",
+      "-of",
+      "json",
+      localPath,
+    ],
+    { timeout: timeoutMs, killSignal: "SIGKILL" },
+  );
 
   const parsed = JSON.parse(stdout) as FfprobeOutput;
 

@@ -216,7 +216,12 @@ export async function processProject(
     await markProjectSplitting(supabase, project);
 
     console.log(`[worker] downloading project source ${project.id}: ${project.storage_path}`);
-    const downloaded = await downloadJobAudio(supabase, project, config.tmpDir);
+    const downloaded = await downloadJobAudio(
+      supabase,
+      project,
+      config.tmpDir,
+      config.downloadTimeoutSeconds,
+    );
     projectTmpDir = downloaded.jobTmpDir;
     const partsDir = path.join(projectTmpDir, "parts");
 
@@ -226,7 +231,11 @@ export async function processProject(
       `[worker] downloaded ${downloaded.bytes} bytes to ${downloaded.localPath}`,
     );
 
-    const audioInfo = await probeAudio(config.ffprobePath, downloaded.localPath);
+    const audioInfo = await probeAudio(
+      config.ffprobePath,
+      downloaded.localPath,
+      config.ffmpegTimeoutSeconds * 1000,
+    );
     const totalDurationSec = audioInfo.durationSec;
 
     if (totalDurationSec === null) {
@@ -282,7 +291,11 @@ export async function processProject(
         partLocalPath,
       ];
 
-      const ffmpeg = spawn(config.ffmpegPath, ffmpegArgs, { stdio: ["ignore", "ignore", "pipe"] });
+      const ffmpeg = spawn(config.ffmpegPath, ffmpegArgs, {
+        stdio: ["ignore", "ignore", "pipe"],
+        timeout: config.ffmpegTimeoutSeconds * 1000,
+        killSignal: "SIGKILL",
+      });
 
       let ffmpegStderr = "";
       ffmpeg.stderr?.on("data", (chunk) => {
@@ -333,7 +346,11 @@ export async function processProject(
           throw new Error(`Generated part file is too small: ${part.localPath} (${fileStats.size} bytes)`);
         }
 
-        const partInfo = await probeAudio(config.ffprobePath, part.localPath);
+        const partInfo = await probeAudio(
+          config.ffprobePath,
+          part.localPath,
+          config.ffmpegTimeoutSeconds * 1000,
+        );
         if (partInfo.durationSec === null || partInfo.durationSec <= 0) {
           throw new Error(`ffprobe could not determine duration for part ${part.index}: ${part.localPath}`);
         }
@@ -362,7 +379,11 @@ export async function processProject(
       audioContentType: string;
     }> = [];
     for (const part of parts) {
-      const partInfo = await probeAudio(config.ffprobePath, part.localPath);
+      const partInfo = await probeAudio(
+        config.ffprobePath,
+        part.localPath,
+        config.ffmpegTimeoutSeconds * 1000,
+      );
       const storagePath = `${project.user_id}/projects/${project.id}/parts/part_${part.index.toString().padStart(3, "0")}.m4a`;
 
       const fileStats = await stat(part.localPath);
