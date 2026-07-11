@@ -244,6 +244,10 @@ export async function processProject(
 
     console.log("[worker] ffprobe audio info:");
     console.log(JSON.stringify(audioInfo, null, 2));
+    const firstAudioStream = audioInfo.streams.find(
+      (stream) => stream.codecType === "audio",
+    );
+    const preserveStereo = firstAudioStream?.channels === 2;
 
     const partDurationSec = project.part_duration_sec;
     const totalParts = Math.ceil(totalDurationSec / partDurationSec);
@@ -281,13 +285,13 @@ export async function processProject(
         duration.toString(),
         "-vn",
         "-ac",
-        "1",
+        preserveStereo ? "2" : "1",
         "-ar",
         "16000",
         "-c:a",
         "aac",
         "-b:a",
-        "64k",
+        preserveStereo ? "96k" : "64k",
         partLocalPath,
       ];
 

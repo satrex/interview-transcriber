@@ -17,8 +17,21 @@ import type { TranscriptionJob } from "./supabase.js";
 import { loadTermDictionaryPrompt } from "./term-dictionaries.js";
 import { updateProjectProgress } from "./projects.js";
 import {
+  computeSegmentPan,
+  extractPanEnvelope,
+  relabelSegmentsByPan,
+  type PanEnvelope,
+} from "./pan.js";
+import {
+  buildSpeakerReferenceDataUrl,
+  selectReferenceCandidates,
+  type KnownSpeaker,
+} from "./speaker-references.js";
+import {
   createOpenAIClient,
+  NEW_SPEAKER_LABEL_PREFIX,
   OpenAITranscriptionError,
+  type NormalizedSegment,
   transcribeChunk,
 } from "./transcribe.js";
 import { formatErrorMessage } from "./retry.js";
@@ -110,6 +123,34 @@ export async function processJob(
     console.log(JSON.stringify(audioInfo, null, 2));
     await updateJobAudioDuration(supabase, job, audioDurationSec);
 
+    const firstAudioStream = audioInfo.streams.find(
+      (stream) => stream.codecType === "audio",
+    );
+    let panEnvelope: PanEnvelope | null = null;
+
+    if (config.panRelabelEnabled && firstAudioStream?.channels === 2) {
+      try {
+        console.log(`[worker] extracting stereo pan envelope for job ${job.id}`);
+        panEnvelope = await extractPanEnvelope({
+          ffmpegPath: config.ffmpegPath,
+          inputPath: downloaded.localPath,
+          timeoutMs: config.ffmpegTimeoutSeconds * 1000,
+        });
+        console.log(
+          `[worker] extracted pan envelope for job ${job.id}: ${panEnvelope.left.length} window(s)`,
+        );
+      } catch (error) {
+        console.warn(
+          `[worker] failed to extract pan envelope for job ${job.id}; continuing without pan relabel. ${formatErrorMessage(error)}`,
+        );
+        panEnvelope = null;
+      }
+    } else if (config.panRelabelEnabled) {
+      console.log(
+        `[worker] pan relabel skipped for job ${job.id}: first audio stream has ${firstAudioStream?.channels ?? "unknown"} channel(s)`,
+      );
+    }
+
     console.log(
       `[worker] splitting audio into ${config.audioChunkSeconds}s chunks`,
     );
@@ -163,6 +204,10 @@ export async function processJob(
 
     let totalSavedSegmentsCount = 0;
     let totalSkippedSegmentsCount = 0;
+    const allSegments: NormalizedSegment[] = [];
+    const knownSpeakers: KnownSpeaker[] = [];
+    const apiNewLabelToDisplayLabel = new Map<string, string>();
+    let speakerReferencesEnabled = config.speakerReferencesEnabled;
 
     for (const chunk of chunks) {
       const chunkStartSec = chunk.chunkIndex * config.audioChunkSeconds;
@@ -173,19 +218,30 @@ export async function processJob(
 
       await touchJobLock(supabase, job);
 
-      const transcribed = await transcribeChunk({
+      const transcribed = await transcribeChunkWithOptionalReferences({
         openai,
         model: config.openaiTranscriptionModel,
         chunk,
         chunkStartSec,
         promptSuffix: termDictionaryPrompt,
+        knownSpeakers:
+          speakerReferencesEnabled && knownSpeakers.length > 0
+            ? knownSpeakers
+            : undefined,
+        disableReferences() {
+          speakerReferencesEnabled = false;
+        },
       }).catch((error) => {
         console.error(
           `[worker] transcription API failed for job ${job.id} chunk ${chunk.chunkIndex}: ${formatErrorMessage(error)}`,
         );
         throw error;
       });
-      const { segments } = transcribed;
+      const segments = assignDisplayLabels(transcribed.segments, {
+        knownSpeakers,
+        apiNewLabelToDisplayLabel,
+        expectedSpeakerCount: job.expected_speaker_count,
+      });
       totalSavedSegmentsCount += segments.length;
       totalSkippedSegmentsCount += transcribed.skippedSegmentsCount;
 
@@ -204,6 +260,20 @@ export async function processJob(
       heartbeat.assertHealthy();
       await assertJobClaimActive(supabase, job);
       await saveSegments(supabase, job.id, job.user_id, segments);
+      allSegments.push(...segments);
+
+      if (speakerReferencesEnabled && knownSpeakers.length < 4) {
+        await addSpeakerReferencesFromChunk({
+          config,
+          chunkPath: chunk.path,
+          chunkStartSec,
+          outDir: `${downloaded.jobTmpDir}/speaker-references`,
+          knownSpeakers,
+          segments,
+          panEnvelope,
+          expectedSpeakerCount: job.expected_speaker_count,
+        });
+      }
 
       const progress = calculateProgress(chunk.chunkIndex + 1, chunks.length);
       processedAudioSeconds = calculateProcessedAudioSeconds({
@@ -228,6 +298,35 @@ export async function processJob(
         `OpenAI transcription produced 0 usable segments across ${chunks.length} chunk(s); skipped ${totalSkippedSegmentsCount} empty segment(s).`,
         processedAudioSeconds,
       );
+    }
+
+    if (panEnvelope) {
+      try {
+        const relabeled = relabelSegmentsByPan({
+          segments: allSegments,
+          envelope: panEnvelope,
+          expectedSpeakerCount: job.expected_speaker_count,
+        });
+        console.log(`[worker] ${relabeled.summary}`);
+
+        if (relabeled.applied) {
+          const changedSegments = relabeled.segments.filter((segment, index) => {
+            return segment.speakerLabel !== allSegments[index]?.speakerLabel;
+          });
+
+          for (const chunkSegments of groupSegmentsByChunk(changedSegments)) {
+            await saveSegments(supabase, job.id, job.user_id, chunkSegments);
+          }
+
+          console.log(
+            `[worker] pan relabel resaved ${changedSegments.length} changed segment(s) for job ${job.id}`,
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `[worker] pan relabel failed for job ${job.id}; keeping API speaker labels. ${formatErrorMessage(error)}`,
+        );
+      }
     }
 
     await markJobCompleted(supabase, job, audioDurationSec);
@@ -277,6 +376,173 @@ function calculateProcessedAudioSeconds(options: {
   }
 
   return Math.min(options.audioDurationSec, processedByChunks);
+}
+
+async function transcribeChunkWithOptionalReferences(
+  options: Parameters<typeof transcribeChunk>[0] & {
+    disableReferences: () => void;
+  },
+) {
+  try {
+    return await transcribeChunk(options);
+  } catch (error) {
+    if (
+      error instanceof OpenAITranscriptionError &&
+      error.errorCode === "invalid_speaker_reference" &&
+      options.knownSpeakers &&
+      options.knownSpeakers.length > 0
+    ) {
+      console.warn(
+        `[worker] OpenAI rejected known speaker references for chunk ${options.chunk.chunkIndex}; retrying this chunk without references and disabling references for the rest of the job. ${formatErrorMessage(error)}`,
+      );
+      options.disableReferences();
+      return transcribeChunk({
+        ...options,
+        knownSpeakers: undefined,
+      });
+    }
+
+    throw error;
+  }
+}
+
+function assignDisplayLabels(
+  segments: NormalizedSegment[],
+  options: {
+    knownSpeakers: KnownSpeaker[];
+    apiNewLabelToDisplayLabel: Map<string, string>;
+    expectedSpeakerCount: number | null;
+  },
+) {
+  const usedLabels = new Set(options.knownSpeakers.map((speaker) => speaker.displayLabel));
+  for (const label of options.apiNewLabelToDisplayLabel.values()) {
+    usedLabels.add(label);
+  }
+
+  return segments.map((segment) => {
+    if (!segment.speakerLabel.startsWith(NEW_SPEAKER_LABEL_PREFIX)) {
+      usedLabels.add(segment.speakerLabel);
+      return segment;
+    }
+
+    const apiLabel = segment.speakerLabel.slice(NEW_SPEAKER_LABEL_PREFIX.length);
+    const key = apiLabel;
+    let displayLabel = options.apiNewLabelToDisplayLabel.get(key);
+
+    if (!displayLabel) {
+      displayLabel = nextDisplayLabel(usedLabels, options.expectedSpeakerCount);
+      options.apiNewLabelToDisplayLabel.set(key, displayLabel);
+      usedLabels.add(displayLabel);
+    }
+
+    return { ...segment, speakerLabel: displayLabel };
+  });
+}
+
+async function addSpeakerReferencesFromChunk(options: {
+  config: WorkerConfig;
+  chunkPath: string;
+  chunkStartSec: number;
+  outDir: string;
+  knownSpeakers: KnownSpeaker[];
+  segments: NormalizedSegment[];
+  panEnvelope: PanEnvelope | null;
+  expectedSpeakerCount: number | null;
+}) {
+  const softCap = clamp(options.expectedSpeakerCount ?? 4, 1, 4);
+  const knownDisplayLabels = new Set(
+    options.knownSpeakers.map((speaker) => speaker.displayLabel),
+  );
+
+  if (options.knownSpeakers.length >= softCap) {
+    return;
+  }
+
+  const segmentPans = options.panEnvelope
+    ? new Map(
+        options.segments.map((segment) => [
+          segment.segmentIndex,
+          computeSegmentPan(options.panEnvelope!, segment.startSec, segment.endSec),
+        ]),
+      )
+    : undefined;
+  const candidates = selectReferenceCandidates(
+    options.segments,
+    knownDisplayLabels,
+    segmentPans,
+    options.chunkStartSec,
+  );
+
+  for (const candidate of candidates) {
+    if (options.knownSpeakers.length >= softCap || options.knownSpeakers.length >= 4) {
+      return;
+    }
+
+    if (knownDisplayLabels.has(candidate.apiLabel)) {
+      continue;
+    }
+
+    try {
+      const dataUrl = await buildSpeakerReferenceDataUrl({
+        ffmpegPath: options.config.ffmpegPath,
+        chunkPath: options.chunkPath,
+        startSec: candidate.startInChunkSec,
+        durationSec: candidate.endInChunkSec - candidate.startInChunkSec,
+        timeoutMs: options.config.ffmpegTimeoutSeconds * 1000,
+        outDir: options.outDir,
+      });
+      const speaker: KnownSpeaker = {
+        name: `S${options.knownSpeakers.length + 1}`,
+        displayLabel: candidate.apiLabel,
+        dataUrl,
+      };
+      options.knownSpeakers.push(speaker);
+      knownDisplayLabels.add(speaker.displayLabel);
+      console.log(
+        `[worker] added known speaker reference ${speaker.name}->${speaker.displayLabel} from ${candidate.startInChunkSec}s-${candidate.endInChunkSec}s`,
+      );
+    } catch (error) {
+      console.warn(
+        `[worker] failed to build speaker reference for label ${candidate.apiLabel}; will retry from a later chunk if possible. ${formatErrorMessage(error)}`,
+      );
+    }
+  }
+}
+
+function groupSegmentsByChunk(segments: NormalizedSegment[]) {
+  const groups = new Map<number, NormalizedSegment[]>();
+
+  for (const segment of segments) {
+    const group = groups.get(segment.chunkIndex) ?? [];
+    group.push(segment);
+    groups.set(segment.chunkIndex, group);
+  }
+
+  return [...groups.values()];
+}
+
+function nextDisplayLabel(usedLabels: Set<string>, expectedSpeakerCount: number | null) {
+  const maxLabels = clamp(expectedSpeakerCount ?? 4, 1, 4);
+
+  for (let i = 0; i < maxLabels; i++) {
+    const label = String.fromCharCode("A".charCodeAt(0) + i);
+    if (!usedLabels.has(label)) {
+      return label;
+    }
+  }
+
+  for (let i = 0; i < 4; i++) {
+    const label = String.fromCharCode("A".charCodeAt(0) + i);
+    if (!usedLabels.has(label)) {
+      return label;
+    }
+  }
+
+  return "D";
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function startHeartbeat(

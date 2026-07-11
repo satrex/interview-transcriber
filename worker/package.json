@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
+    "analyze-pan": "tsx scripts/analyze-pan.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js"
   },

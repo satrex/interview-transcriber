@@ -49,6 +49,8 @@ WORKER_DOWNLOAD_TIMEOUT_SECONDS=900
 OPENAI_API_KEY=
 OPENAI_TRANSCRIPTION_MODEL=gpt-4o-transcribe-diarize
 OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS=1200
+SPEAKER_PAN_RELABEL_ENABLED=true
+SPEAKER_REFERENCES_ENABLED=true
 ```
 
 Use the Supabase service role key only on the VPS. Do not expose it to the browser.
@@ -77,6 +79,16 @@ OpenAI transcription API failures are classified separately from job attempts. T
 Requeued OpenAI failures are attempted up to `WORKER_MAX_ATTEMPTS`; the final failed job retains its specific `error_code`. `attempt_count` means the number of times a worker claimed the job. Chunk-level OpenAI retries do not increment it.
 
 If transcription still exceeds `OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS=1200` on the target VPS, reduce `AUDIO_CHUNK_SECONDS` to `300` so each request contains five minutes of audio.
+
+## Speaker Identity
+
+The worker keeps sending mono 16 kHz WAV chunks to the diarization model, then improves speaker identity across chunks as a best-effort post-processing step.
+
+When `SPEAKER_PAN_RELABEL_ENABLED=true`, stereo source audio is analyzed once before chunk transcription. The worker extracts a 0.25 second L/R energy envelope from the original uploaded file, computes each segment's pan position, and clusters segment pans across the whole job. The relabel is applied only when the stereo separation gate passes: cluster centers must be far enough apart and every cluster must have enough speech duration. Mono, dual-mono, and center-mixed files keep the API labels unchanged.
+
+When `SPEAKER_REFERENCES_ENABLED=true`, the worker also builds short reference clips for newly observed speakers and sends them as `known_speaker_references` on later chunks. If reference extraction fails for a candidate, that speaker is skipped and retried from a later chunk. If OpenAI rejects the references for a chunk, that chunk is retried once without references and reference use is disabled for the rest of the job.
+
+Both features are enhancements only. Failures in pan extraction, pan relabeling, reference clip creation, or reference validation are logged and the job continues with the transcription labels already saved.
 
 Chunk files are written under the job temporary directory with names like:
 

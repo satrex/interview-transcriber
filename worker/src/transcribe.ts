@@ -11,6 +11,7 @@ export const TRANSCRIPTION_PROMPT = [
   "口語、相槌、固有名詞、音楽用語を含みます。",
 ].join("\n");
 export const TRANSCRIPTION_TEMPERATURE = 0;
+export const NEW_SPEAKER_LABEL_PREFIX = "__new_speaker__";
 
 export type NormalizedSegment = {
   speakerLabel: string;
@@ -31,6 +32,7 @@ export type OpenAITranscriptionErrorCode =
   | "quota_exceeded"
   | "rate_limited"
   | "unsupported_prompt_for_diarization"
+  | "invalid_speaker_reference"
   | "openai_timeout"
   | "openai_error";
 
@@ -73,6 +75,7 @@ export async function transcribeChunk(options: {
   chunk: AudioChunk;
   chunkStartSec: number;
   promptSuffix?: string | null;
+  knownSpeakers?: Array<{ name: string; displayLabel: string; dataUrl: string }>;
 }): Promise<TranscribedChunk> {
   const transcription = await createTranscriptionWithRetry(options);
 
@@ -93,6 +96,7 @@ export async function transcribeChunk(options: {
       segment,
       options.chunk.chunkIndex,
       options.chunkStartSec,
+      options.knownSpeakers,
     );
 
     if (!normalized) {
@@ -119,6 +123,7 @@ async function createTranscriptionWithRetry(options: {
   model: string;
   chunk: AudioChunk;
   promptSuffix?: string | null;
+  knownSpeakers?: Array<{ name: string; dataUrl: string }>;
 }) {
   let attempt = 1;
   const useDiarization = true;
@@ -137,6 +142,13 @@ async function createTranscriptionWithRetry(options: {
 
       if (!useDiarization && promptText) {
         request.prompt = promptText;
+      }
+
+      if (options.knownSpeakers && options.knownSpeakers.length > 0) {
+        request.known_speaker_names = options.knownSpeakers.map((speaker) => speaker.name);
+        request.known_speaker_references = options.knownSpeakers.map(
+          (speaker) => speaker.dataUrl,
+        );
       }
 
       return (await options.openai.audio.transcriptions.create(
@@ -183,6 +195,11 @@ function classifyOpenAITranscriptionError(error: unknown): {
     status === 400 &&
     message.includes("prompt is not supported") &&
     message.includes("diarization");
+  const isInvalidSpeakerReference =
+    status === 400 &&
+    (message.includes("speaker reference") ||
+      message.includes("known_speaker") ||
+      message.includes("known speaker"));
 
   if (isQuotaFailure) {
     return {
@@ -197,6 +214,15 @@ function classifyOpenAITranscriptionError(error: unknown): {
     return {
       delayMs: () => 0,
       errorCode: "unsupported_prompt_for_diarization",
+      maxAttempts: 1,
+      retryable: false,
+    };
+  }
+
+  if (isInvalidSpeakerReference) {
+    return {
+      delayMs: () => 0,
+      errorCode: "invalid_speaker_reference",
       maxAttempts: 1,
       retryable: false,
     };
@@ -276,6 +302,7 @@ function normalizeSegment(
   segment: NonNullable<DiarizedTranscriptionResponse["segments"]>[number],
   chunkIndex: number,
   chunkStartSec: number,
+  knownSpeakers?: Array<{ name: string; displayLabel: string }>,
 ): Omit<NormalizedSegment, "segmentIndex"> | null {
   if (typeof segment.start !== "number" || typeof segment.end !== "number") {
     throw new Error(`OpenAI segment is missing timestamps for chunk ${chunkIndex}.`);
@@ -287,8 +314,15 @@ function normalizeSegment(
     return null;
   }
 
+  const knownSpeaker = knownSpeakers?.find((speaker) => speaker.name === segment.speaker);
+  const speakerLabel =
+    knownSpeaker?.displayLabel ||
+    (knownSpeakers && knownSpeakers.length > 0 && isApiGeneratedSpeakerLabel(segment.speaker)
+      ? `${NEW_SPEAKER_LABEL_PREFIX}${segment.speaker}`
+      : segment.speaker || "unknown");
+
   return {
-    speakerLabel: segment.speaker || "unknown",
+    speakerLabel,
     startSec: roundSeconds(chunkStartSec + segment.start),
     endSec: roundSeconds(chunkStartSec + segment.end),
     text,
@@ -298,4 +332,8 @@ function normalizeSegment(
 
 function roundSeconds(value: number) {
   return Math.round(value * 1000) / 1000;
+}
+
+function isApiGeneratedSpeakerLabel(value: string | undefined) {
+  return Boolean(value && /^[A-Z]$/.test(value));
 }

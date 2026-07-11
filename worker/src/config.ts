@@ -18,6 +18,8 @@ export type WorkerConfig = {
   maxLockRefreshFailures: number;
   maxAttempts: number;
   pollIntervalMs: number;
+  panRelabelEnabled: boolean;
+  speakerReferencesEnabled: boolean;
 };
 
 export function loadConfig(): WorkerConfig {
@@ -72,6 +74,16 @@ export function loadConfig(): WorkerConfig {
       10_000,
       "WORKER_POLL_INTERVAL_MS",
     ),
+    panRelabelEnabled: parseBoolean(
+      process.env.SPEAKER_PAN_RELABEL_ENABLED,
+      true,
+      "SPEAKER_PAN_RELABEL_ENABLED",
+    ),
+    speakerReferencesEnabled: parseBoolean(
+      process.env.SPEAKER_REFERENCES_ENABLED,
+      true,
+      "SPEAKER_REFERENCES_ENABLED",
+    ),
   };
 }
 
@@ -111,4 +123,22 @@ function parsePositiveInteger(
   }
 
   return parsed;
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean, name: string) {
+  if (value === undefined || value === "") {
+    return fallback;
+  }
+
+  const normalized = value.toLowerCase();
+
+  if (normalized === "true") {
+    return true;
+  }
+
+  if (normalized === "false") {
+    return false;
+  }
+
+  throw new Error(`${name} must be "true" or "false".`);
 }
