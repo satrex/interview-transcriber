@@ -7,7 +7,9 @@ const ffprobePath = process.env.FFPROBE_PATH || "ffprobe";
 const timeoutMs = Number.parseInt(process.env.FFMPEG_TIMEOUT_SECONDS || "1800", 10) * 1000;
 
 if (!audioFile) {
-  console.error("Usage: npx tsx scripts/analyze-pan.ts <audio-file>");
+  console.error(
+    "Usage: npx tsx scripts/analyze-pan.ts <audio-file> [--segment <start-sec> <end-sec> <k>]",
+  );
   process.exit(1);
 }
 
@@ -54,6 +56,43 @@ for (const k of [2, 3, 4]) {
   );
 }
 
+const segmentArgIndex = process.argv.indexOf("--segment");
+
+if (segmentArgIndex >= 0) {
+  const startSec = Number.parseFloat(process.argv[segmentArgIndex + 1] || "");
+  const endSec = Number.parseFloat(process.argv[segmentArgIndex + 2] || "");
+  const k = Number.parseInt(process.argv[segmentArgIndex + 3] || "2", 10);
+
+  if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) {
+    throw new Error("--segment requires <start-sec> <end-sec>.");
+  }
+
+  const clustered = clusterPans(windowItems, k);
+
+  console.log(
+    `segment windows ${startSec.toFixed(3)}..${endSec.toFixed(3)} k=${k} centers=[${clustered.centers
+      .map((center) => center.toFixed(3))
+      .join(", ")}]`,
+  );
+
+  const startIndex = Math.max(0, Math.floor(startSec / envelope.windowSec));
+  const endIndex = Math.min(envelope.left.length, Math.ceil(endSec / envelope.windowSec));
+
+  for (let index = startIndex; index < endIndex; index++) {
+    const left = envelope.left[index] ?? 0;
+    const right = envelope.right[index] ?? 0;
+    const leftRoot = Math.sqrt(left);
+    const rightRoot = Math.sqrt(right);
+    const totalRoot = leftRoot + rightRoot;
+    const pan = totalRoot > 0 ? (rightRoot - leftRoot) / totalRoot : 0;
+    const clusterIndex = nearestCenterIndex(pan, clustered.centers);
+
+    console.log(
+      `${(index * envelope.windowSec).toFixed(3)} pan=${pan.toFixed(3)} cluster=${clusterIndex} energy=${formatNumber(left + right)}`,
+    );
+  }
+}
+
 function formatHistogram(values: number[]) {
   const buckets = new Array<number>(10).fill(0);
 
@@ -97,4 +136,20 @@ function max(values: number[]) {
 
 function formatNumber(value: number) {
   return Number.isFinite(value) ? value.toExponential(3) : "n/a";
+}
+
+function nearestCenterIndex(value: number, centers: number[]) {
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  centers.forEach((center, index) => {
+    const distance = Math.abs(value - center);
+
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+
+  return bestIndex;
 }

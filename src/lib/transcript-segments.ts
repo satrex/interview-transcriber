@@ -16,6 +16,8 @@ type SegmentRow = {
   chunk_index: unknown;
   end_sec: unknown;
   id: unknown;
+  mix_suspect_boundary_sec?: unknown;
+  mix_suspect_speaker_label?: unknown;
   segment_index: unknown;
   speaker_label: unknown;
   start_sec: unknown;
@@ -44,13 +46,13 @@ export async function fetchAllSegments(
     const { data, error } = await supabase
       .from("transcription_segments")
       .select(
-        "id, speaker_label, start_sec, end_sec, text, chunk_index, segment_index",
+        "id, speaker_label, start_sec, end_sec, text, chunk_index, segment_index, mix_suspect_boundary_sec, mix_suspect_speaker_label",
       )
       .eq("job_id", jobId)
-      .order("chunk_index", { ascending: true })
-      .order("segment_index", { ascending: true })
       .order("start_sec", { ascending: true })
       .order("end_sec", { ascending: true })
+      .order("chunk_index", { ascending: true })
+      .order("segment_index", { ascending: true })
       .range(offset, offset + pageSize - 1);
 
     if (error) {
@@ -69,6 +71,16 @@ export async function fetchAllSegments(
     chunkIndex: Number(segment.chunk_index),
     endSec: Number(segment.end_sec),
     id: String(segment.id),
+    mixSuspectBoundarySec:
+      segment.mix_suspect_boundary_sec === null ||
+      segment.mix_suspect_boundary_sec === undefined
+        ? null
+        : Number(segment.mix_suspect_boundary_sec),
+    mixSuspectSpeakerLabel:
+      segment.mix_suspect_speaker_label === null ||
+      segment.mix_suspect_speaker_label === undefined
+        ? null
+        : String(segment.mix_suspect_speaker_label),
     segmentIndex: Number(segment.segment_index),
     speakerLabel: String(segment.speaker_label),
     startSec: Number(segment.start_sec),

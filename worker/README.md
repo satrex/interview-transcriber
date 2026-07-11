@@ -51,6 +51,7 @@ OPENAI_TRANSCRIPTION_MODEL=gpt-4o-transcribe-diarize
 OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS=1200
 SPEAKER_PAN_RELABEL_ENABLED=true
 SPEAKER_REFERENCES_ENABLED=true
+SPEAKER_MIX_RESPLIT_ENABLED=false
 ```
 
 Use the Supabase service role key only on the VPS. Do not expose it to the browser.
@@ -89,6 +90,8 @@ When `SPEAKER_PAN_RELABEL_ENABLED=true`, stereo source audio is analyzed once be
 When `SPEAKER_REFERENCES_ENABLED=true`, the worker also builds short reference clips for newly observed speakers and sends them as `known_speaker_references` on later chunks. If reference extraction fails for a candidate, that speaker is skipped and retried from a later chunk. If OpenAI rejects the references for a chunk, that chunk is retried once without references and reference use is disabled for the rest of the job.
 
 Both features are enhancements only. Failures in pan extraction, pan relabeling, reference clip creation, or reference validation are logged and the job continues with the transcription labels already saved.
+
+The pan pass also flags possible tail-overlap segments when a segment edge contains a sustained run of energy from another speaker cluster. The UI shows these as 語尾かぶり疑い so editors can jump directly to the suspect segment and correct it. When `SPEAKER_MIX_RESPLIT_ENABLED=true`, the worker re-transcribes only those suspect regions from the source L/R channels, replaces the main speaker text, and inserts the intruding speaker text as a new segment when non-empty. It defaults to `false`; keep it disabled until suspect detection has been checked on real recordings.
 
 Chunk files are written under the job temporary directory with names like:
 

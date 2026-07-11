@@ -1,3 +1,5 @@
+import type { BackchannelMode } from "@/lib/backchannel";
+
 export type TranscriptSegment = {
   id: string;
   speakerLabel: string;
@@ -5,6 +7,8 @@ export type TranscriptSegment = {
   endSec: number;
   text: string;
   chunkIndex: number;
+  mixSuspectBoundarySec?: number | null;
+  mixSuspectSpeakerLabel?: string | null;
   segmentIndex?: number;
 };
 
@@ -19,6 +23,7 @@ export type SegmentEdit = {
 export type SegmentEditMap = Record<string, SegmentEdit>;
 
 export type TranscriptBlock = {
+  absorbedBackchannels: AbsorbedBackchannel[];
   speakerLabel: string;
   speakerName: string;
   startSec: number;
@@ -26,25 +31,61 @@ export type TranscriptBlock = {
   paragraphs: string[];
 };
 
+export type AbsorbedBackchannel = {
+  segmentId: string;
+  speakerLabel: string;
+  speakerName: string;
+  startSec: number;
+  text: string;
+};
+
 const DEFAULT_PARAGRAPH_MAX_LENGTH = 360;
 
 export function buildTranscriptBlocks(
   segments: TranscriptSegment[],
   speakerNames: SpeakerNameMap = {},
+  options: {
+    backchannelIds?: Set<string>;
+    backchannelMode?: BackchannelMode;
+  } = {},
 ) {
-  const blocks: Array<Omit<TranscriptBlock, "paragraphs"> & { text: string }> = [];
+  const blocks: Array<
+    Omit<TranscriptBlock, "paragraphs"> & { text: string }
+  > = [];
+  const backchannelMode = options.backchannelMode ?? "keep";
+  const pendingBackchannels: AbsorbedBackchannel[] = [];
 
   for (const segment of segments) {
+    const isBackchannel =
+      backchannelMode !== "keep" && options.backchannelIds?.has(segment.id);
+
+    if (isBackchannel) {
+      if (backchannelMode === "inline") {
+        pendingBackchannels.push({
+          segmentId: segment.id,
+          speakerLabel: segment.speakerLabel,
+          speakerName: speakerNames[segment.speakerLabel] || segment.speakerLabel,
+          startSec: segment.startSec,
+          text: normalizeSegmentText(segment.text),
+        });
+      }
+
+      continue;
+    }
+
     const speakerName = speakerNames[segment.speakerLabel] || segment.speakerLabel;
     const previous = blocks.at(-1);
 
     if (previous && previous.speakerLabel === segment.speakerLabel) {
       previous.endSec = Math.max(previous.endSec, segment.endSec);
       previous.text = joinText(previous.text, segment.text);
+      previous.absorbedBackchannels.push(...pendingBackchannels);
+      pendingBackchannels.length = 0;
       continue;
     }
 
     blocks.push({
+      absorbedBackchannels: pendingBackchannels.splice(0),
       speakerLabel: segment.speakerLabel,
       speakerName,
       startSec: segment.startSec,

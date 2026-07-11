@@ -20,6 +20,7 @@ export type WorkerConfig = {
   pollIntervalMs: number;
   panRelabelEnabled: boolean;
   speakerReferencesEnabled: boolean;
+  mixResplitEnabled: boolean;
 };
 
 export function loadConfig(): WorkerConfig {
@@ -83,6 +84,11 @@ export function loadConfig(): WorkerConfig {
       process.env.SPEAKER_REFERENCES_ENABLED,
       true,
       "SPEAKER_REFERENCES_ENABLED",
+    ),
+    mixResplitEnabled: parseBoolean(
+      process.env.SPEAKER_MIX_RESPLIT_ENABLED,
+      false,
+      "SPEAKER_MIX_RESPLIT_ENABLED",
     ),
   };
 }

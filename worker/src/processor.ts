@@ -16,8 +16,10 @@ import { downloadJobAudio, uploadJobAudioChunks } from "./storage.js";
 import type { TranscriptionJob } from "./supabase.js";
 import { loadTermDictionaryPrompt } from "./term-dictionaries.js";
 import { updateProjectProgress } from "./projects.js";
+import { resplitMixSuspects } from "./mix-resplit.js";
 import {
   computeSegmentPan,
+  detectTailMix,
   extractPanEnvelope,
   relabelSegmentsByPan,
   type PanEnvelope,
@@ -310,17 +312,102 @@ export async function processJob(
         console.log(`[worker] ${relabeled.summary}`);
 
         if (relabeled.applied) {
-          const changedSegments = relabeled.segments.filter((segment, index) => {
-            return segment.speakerLabel !== allSegments[index]?.speakerLabel;
+          const clusterBySpeakerLabel = new Map(
+            relabeled.labelsByCluster
+              ? [...relabeled.labelsByCluster.entries()].map(([clusterIndex, label]) => [
+                  label,
+                  clusterIndex,
+                ])
+              : [],
+          );
+          const segmentsWithMixSuspects =
+            relabeled.centers && relabeled.labelsByCluster
+              ? relabeled.segments.map((segment) => {
+                  try {
+                    const ownClusterIndex =
+                      clusterBySpeakerLabel.get(segment.speakerLabel) ??
+                      nearestCenterIndex(
+                        computeSegmentPan(
+                          panEnvelope,
+                          segment.startSec,
+                          segment.endSec,
+                        ).pan,
+                        relabeled.centers ?? [],
+                      );
+                    const suspect = detectTailMix({
+                      envelope: panEnvelope,
+                      startSec: segment.startSec,
+                      endSec: segment.endSec,
+                      ownClusterIndex,
+                      centers: relabeled.centers ?? [],
+                    });
+
+                    if (!suspect) {
+                      return {
+                        ...segment,
+                        mixSuspectBoundarySec: null,
+                        mixSuspectSpeakerLabel: null,
+                      };
+                    }
+
+                    return {
+                      ...segment,
+                      mixSuspectBoundarySec: suspect.boundarySec,
+                      mixSuspectSpeakerLabel:
+                        relabeled.labelsByCluster?.get(suspect.intruderClusterIndex) ??
+                        null,
+                    };
+                  } catch (error) {
+                    console.warn(
+                      `[worker] tail mix detection skipped for job ${job.id} chunk ${segment.chunkIndex} segment ${segment.segmentIndex}: ${formatErrorMessage(error)}`,
+                    );
+                    return segment;
+                  }
+                })
+              : relabeled.segments;
+          const changedSegments = segmentsWithMixSuspects.filter((segment, index) => {
+            const original = allSegments[index];
+
+            return (
+              segment.speakerLabel !== original?.speakerLabel ||
+              segment.mixSuspectBoundarySec !== (original?.mixSuspectBoundarySec ?? null) ||
+              segment.mixSuspectSpeakerLabel !== (original?.mixSuspectSpeakerLabel ?? null)
+            );
           });
+          const mixSuspectCount = segmentsWithMixSuspects.filter(
+            (segment) => segment.mixSuspectBoundarySec !== null && segment.mixSuspectBoundarySec !== undefined,
+          ).length;
 
           for (const chunkSegments of groupSegmentsByChunk(changedSegments)) {
             await saveSegments(supabase, job.id, job.user_id, chunkSegments);
           }
 
           console.log(
-            `[worker] pan relabel resaved ${changedSegments.length} changed segment(s) for job ${job.id}`,
+            `[worker] pan relabel resaved ${changedSegments.length} changed segment(s) for job ${job.id}; mix suspects=${mixSuspectCount}`,
           );
+
+          if (
+            config.mixResplitEnabled &&
+            mixSuspectCount > 0 &&
+            relabeled.centers &&
+            relabeled.labelsByCluster
+          ) {
+            const result = await resplitMixSuspects({
+              supabase,
+              openai,
+              ffmpegPath: config.ffmpegPath,
+              inputPath: downloaded.localPath,
+              timeoutMs: config.ffmpegTimeoutSeconds * 1000,
+              outDir: `${downloaded.jobTmpDir}/mix-resplit`,
+              jobId: job.id,
+              centers: relabeled.centers,
+              labelsByCluster: relabeled.labelsByCluster,
+              segments: segmentsWithMixSuspects,
+            });
+            console.log(
+              `[worker] mix resplit processed ${result.processedCount} segment(s), inserted ${result.insertedCount} segment(s) for job ${job.id}`,
+            );
+          }
         }
       } catch (error) {
         console.warn(
@@ -519,6 +606,22 @@ function groupSegmentsByChunk(segments: NormalizedSegment[]) {
   }
 
   return [...groups.values()];
+}
+
+function nearestCenterIndex(value: number, centers: number[]) {
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  centers.forEach((center, index) => {
+    const distance = Math.abs(value - center);
+
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+
+  return bestIndex;
 }
 
 function nextDisplayLabel(usedLabels: Set<string>, expectedSpeakerCount: number | null) {

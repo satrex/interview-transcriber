@@ -108,8 +108,23 @@ export function InterviewEditor({
       <SpeakerAnalysisPanel
         analysis={analysis}
         jobId={jobId}
+        mixSuspects={segments
+          .filter(
+            (segment) =>
+              segment.mixSuspectBoundarySec !== null &&
+              segment.mixSuspectBoundarySec !== undefined,
+          )
+          .map((segment) => ({
+            boundarySec: segment.mixSuspectBoundarySec ?? segment.startSec,
+            id: segment.id,
+            intruderSpeakerLabel: segment.mixSuspectSpeakerLabel ?? null,
+            speakerLabel: segment.speakerLabel,
+            startSec: segment.startSec,
+            text: segment.text,
+          }))}
         onReturnToPreviewPosition={returnToPreviewPosition}
         speakerReturnSegmentId={speakerReturnSegmentId}
+        speakerNames={speakerNames}
         speakers={speakers}
       />
 

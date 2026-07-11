@@ -11,6 +11,8 @@ const MIN_CLUSTER_SEGMENT_SEC = 0.8;
 const AMBIGUOUS_MARGIN_RATIO = 0.35;
 const ENERGY_FLOOR_PERCENTILE = 0.2;
 const SILENCE_EPSILON = 1e-9;
+const MIN_MIX_RUN_SEC = 0.5;
+const MIX_MIN_ENERGY_RATIO = 0.15;
 
 export type PanEnvelope = {
   windowSec: number;
@@ -19,6 +21,19 @@ export type PanEnvelope = {
 };
 
 export type SegmentPan = { pan: number; energyPerSec: number };
+
+export type MixSuspect = {
+  boundarySec: number;
+  intruderClusterIndex: number;
+};
+
+export type PanRelabelResult = {
+  segments: NormalizedSegment[];
+  applied: boolean;
+  summary: string;
+  centers?: number[];
+  labelsByCluster?: Map<number, string>;
+};
 
 type PanPoint = {
   segment: NormalizedSegment;
@@ -252,7 +267,7 @@ export function relabelSegmentsByPan(options: {
   segments: NormalizedSegment[];
   envelope: PanEnvelope;
   expectedSpeakerCount: number | null;
-}): { segments: NormalizedSegment[]; applied: boolean; summary: string } {
+}): PanRelabelResult {
   if (options.segments.length === 0) {
     return { segments: options.segments, applied: false, summary: "pan relabel skipped: no segments" };
   }
@@ -379,7 +394,136 @@ export function relabelSegmentsByPan(options: {
   return {
     segments: relabeled,
     applied: true,
+    centers,
+    labelsByCluster,
     summary: `pan relabel applied: centers=${formatCenters(centers)} durations=${durations} changed=${changedCount}/${points.length} ambiguous=${ambiguousCount}`,
+  };
+}
+
+export function detectTailMix(options: {
+  envelope: PanEnvelope;
+  startSec: number;
+  endSec: number;
+  ownClusterIndex: number;
+  centers: number[];
+}): MixSuspect | null {
+  const startIndex = Math.max(
+    0,
+    Math.floor(options.startSec / options.envelope.windowSec),
+  );
+  const endIndex = Math.min(
+    options.envelope.left.length,
+    Math.ceil(options.endSec / options.envelope.windowSec),
+  );
+  const windows: Array<{
+    clusterIndex: number;
+    energy: number;
+    startSec: number;
+  }> = [];
+
+  for (let index = startIndex; index < endIndex; index++) {
+    const left = options.envelope.left[index] ?? 0;
+    const right = options.envelope.right[index] ?? 0;
+    const energy = left + right;
+
+    if (energy <= SILENCE_EPSILON) {
+      continue;
+    }
+
+    const leftRoot = Math.sqrt(left);
+    const rightRoot = Math.sqrt(right);
+    const totalRoot = leftRoot + rightRoot;
+    const pan = totalRoot > SILENCE_EPSILON ? (rightRoot - leftRoot) / totalRoot : 0;
+
+    windows.push({
+      clusterIndex: nearestCenterIndex(pan, options.centers),
+      energy,
+      startSec: index * options.envelope.windowSec,
+    });
+  }
+
+  if (windows.length === 0) {
+    return null;
+  }
+
+  const energyFloor = percentile(
+    windows.map((window) => window.energy),
+    ENERGY_FLOOR_PERCENTILE,
+  );
+  const activeWindows = windows.filter((window) => window.energy >= energyFloor);
+  const totalEnergy = activeWindows.reduce((sum, window) => sum + window.energy, 0);
+
+  if (activeWindows.length === 0 || totalEnergy <= SILENCE_EPSILON) {
+    return null;
+  }
+
+  return (
+    detectEdgeRun({
+      direction: "tail",
+      envelopeWindowSec: options.envelope.windowSec,
+      ownClusterIndex: options.ownClusterIndex,
+      totalEnergy,
+      windows: activeWindows,
+    }) ||
+    detectEdgeRun({
+      direction: "head",
+      envelopeWindowSec: options.envelope.windowSec,
+      ownClusterIndex: options.ownClusterIndex,
+      totalEnergy,
+      windows: activeWindows,
+    })
+  );
+}
+
+function detectEdgeRun(options: {
+  direction: "head" | "tail";
+  envelopeWindowSec: number;
+  ownClusterIndex: number;
+  totalEnergy: number;
+  windows: Array<{ clusterIndex: number; energy: number; startSec: number }>;
+}) {
+  const ordered =
+    options.direction === "tail"
+      ? [...options.windows].reverse()
+      : options.windows;
+  const run: typeof options.windows = [];
+  let intruderClusterIndex: number | null = null;
+
+  for (const window of ordered) {
+    if (window.clusterIndex === options.ownClusterIndex) {
+      break;
+    }
+
+    if (intruderClusterIndex === null) {
+      intruderClusterIndex = window.clusterIndex;
+    }
+
+    if (window.clusterIndex !== intruderClusterIndex) {
+      break;
+    }
+
+    run.push(window);
+  }
+
+  if (intruderClusterIndex === null || run.length === 0) {
+    return null;
+  }
+
+  const runDurationSec = run.length * options.envelopeWindowSec;
+  const runEnergy = run.reduce((sum, window) => sum + window.energy, 0);
+
+  if (
+    runDurationSec < MIN_MIX_RUN_SEC ||
+    runEnergy / options.totalEnergy < MIX_MIN_ENERGY_RATIO
+  ) {
+    return null;
+  }
+
+  const boundarySec = Math.min(...run.map((window) => window.startSec));
+
+  return {
+    boundarySec,
+    intruderClusterIndex,
   };
 }
 

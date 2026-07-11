@@ -7,6 +7,7 @@ import {
 } from "@/app/actions";
 import { ExpectedSpeakerCountForm } from "@/components/expected-speaker-count-form";
 import type { SpeakerAnalysis } from "@/lib/speaker-analysis";
+import { formatTimestamp, type SpeakerNameMap } from "@/lib/transcript";
 
 export type SpeakerNameFormRow = {
   speakerLabel: string;
@@ -16,8 +17,17 @@ export type SpeakerNameFormRow = {
 export type SpeakerAnalysisPanelProps = {
   analysis: SpeakerAnalysis;
   jobId: string;
+  mixSuspects?: Array<{
+    id: string;
+    speakerLabel: string;
+    startSec: number;
+    boundarySec: number;
+    intruderSpeakerLabel: string | null;
+    text: string;
+  }>;
   onReturnToPreviewPosition?: () => void;
   speakerReturnSegmentId?: string | null;
+  speakerNames?: SpeakerNameMap;
   speakers: SpeakerNameFormRow[];
 };
 
@@ -29,8 +39,10 @@ const initialState: SpeakerNamesActionState = {
 export function SpeakerAnalysisPanel({
   analysis,
   jobId,
+  mixSuspects = [],
   onReturnToPreviewPosition,
   speakerReturnSegmentId = null,
+  speakerNames = {},
   speakers,
 }: SpeakerAnalysisPanelProps) {
   const [state, formAction, pending] = useActionState(
@@ -100,6 +112,55 @@ export function SpeakerAnalysisPanel({
           想定より多い話者ラベルが検出されています。超過分は「要確認」として表示します。
         </p>
       ) : null}
+
+      <div className="mt-5 rounded-md border border-zinc-200 bg-white p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-950">
+              語尾かぶり疑い {mixSuspects.length}件
+            </h3>
+            <p className="mt-1 text-xs text-zinc-500">
+              パン位置から別話者の声が重なった可能性があるsegmentです。
+            </p>
+          </div>
+        </div>
+
+        {mixSuspects.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {mixSuspects.map((suspect) => (
+              <button
+                key={suspect.id}
+                type="button"
+                onClick={() => {
+                  document
+                    .getElementById(`segment-edit-${suspect.id}`)
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}
+                className="block w-full rounded-md border border-rose-100 bg-rose-50 px-3 py-2 text-left text-sm transition hover:border-rose-200 hover:bg-rose-100"
+              >
+                <span className="font-medium text-rose-950">
+                  {formatTimestamp(suspect.startSec)} /{" "}
+                  {speakerNames[suspect.speakerLabel] || suspect.speakerLabel}
+                </span>
+                <span className="ml-2 text-xs text-rose-800">
+                  混入:
+                  {suspect.intruderSpeakerLabel
+                    ? speakerNames[suspect.intruderSpeakerLabel] ||
+                      suspect.intruderSpeakerLabel
+                    : "不明"}
+                  {" "}
+                  {formatTimestamp(suspect.boundarySec)}-
+                </span>
+                <span className="mt-1 block truncate text-xs text-zinc-700">
+                  {suspect.text}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-zinc-500">検出された疑いはありません。</p>
+        )}
+      </div>
 
       {rows.length > 0 ? (
         <form action={formAction} className="mt-5 space-y-4">

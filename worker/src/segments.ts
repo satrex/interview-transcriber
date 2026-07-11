@@ -40,6 +40,8 @@ export async function saveSegments(
             text: segment.text,
             chunk_index: segment.chunkIndex,
             segment_index: segment.segmentIndex,
+            mix_suspect_boundary_sec: segment.mixSuspectBoundarySec ?? null,
+            mix_suspect_speaker_label: segment.mixSuspectSpeakerLabel ?? null,
           })),
           {
             onConflict: "job_id,chunk_index,segment_index",

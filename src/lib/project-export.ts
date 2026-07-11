@@ -7,6 +7,10 @@ import {
   type TranscriptSegment,
 } from "@/lib/transcript";
 import {
+  classifyBackchannels,
+  type BackchannelMode,
+} from "@/lib/backchannel";
+import {
   fetchAllSegmentEdits,
   fetchAllSegments,
 } from "@/lib/transcript-segments";
@@ -49,10 +53,12 @@ export class ProjectExportError extends Error {
 }
 
 export async function buildProjectMarkdownExport({
+  backchannelMode = "hide",
   projectId,
   supabase,
   userId,
 }: {
+  backchannelMode?: BackchannelMode;
   projectId: string;
   supabase: ServerSupabaseClient;
   userId: string;
@@ -67,7 +73,7 @@ export async function buildProjectMarkdownExport({
 
   for (const partJob of partJobs) {
     const partStartSec = Number(partJob.part_start_sec ?? 0);
-    const segments = await loadEffectiveSegments({
+    const { segmentEdits, segments } = await loadEffectiveSegments({
       jobId: partJob.id,
       partStartSec,
       supabase,
@@ -75,7 +81,11 @@ export async function buildProjectMarkdownExport({
     const speakerNames = await loadSpeakerNames({ jobId: partJob.id, supabase });
     exportedSegmentCount += segments.length;
 
-    const blocks = buildTranscriptBlocks(segments, speakerNames);
+    const backchannelIds = classifyBackchannels(segments, segmentEdits);
+    const blocks = buildTranscriptBlocks(segments, speakerNames, {
+      backchannelIds,
+      backchannelMode,
+    });
     const transcriptMarkdown = buildTranscriptMarkdown(blocks, {
       showTimestamps: true,
     });
@@ -232,7 +242,9 @@ async function loadEffectiveSegments({
     fetchAllSegmentEdits(jobId, { supabase }),
   ]);
 
-  return segments
+  return {
+    segmentEdits,
+    segments: segments
     .map((segment): TranscriptSegment | null => {
       const edit = segmentEdits[segment.id];
 
@@ -248,7 +260,8 @@ async function loadEffectiveSegments({
         text: edit?.editedText || segment.text,
       };
     })
-    .filter((segment): segment is TranscriptSegment => segment !== null);
+    .filter((segment): segment is TranscriptSegment => segment !== null),
+  };
 }
 
 async function loadSpeakerNames({

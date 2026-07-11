@@ -20,6 +20,8 @@ export type NormalizedSegment = {
   text: string;
   chunkIndex: number;
   segmentIndex: number;
+  mixSuspectBoundarySec?: number | null;
+  mixSuspectSpeakerLabel?: string | null;
 };
 
 export type TranscribedChunk = {

@@ -29,6 +29,10 @@ import {
   type SpeakerNameMap,
   type TranscriptSegment,
 } from "@/lib/transcript";
+import {
+  classifyBackchannels,
+  type BackchannelMode,
+} from "@/lib/backchannel";
 import { useSegmentAudioPlayback } from "./use-segment-audio-playback";
 
 export type TranscriptMarkdownProps = {
@@ -86,6 +90,17 @@ export function TranscriptMarkdown({
     string | null
   >(null);
   const [showTimestamps, setShowTimestamps] = useState(true);
+  const [backchannelMode, setBackchannelMode] = useState<BackchannelMode>(() => {
+    if (typeof window === "undefined") {
+      return "inline";
+    }
+
+    const stored = window.localStorage.getItem("transcriptBackchannelMode");
+
+    return stored === "keep" || stored === "inline" || stored === "hide"
+      ? stored
+      : "inline";
+  });
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
@@ -124,13 +139,31 @@ export function TranscriptMarkdown({
     () => buildEffectiveSegments(segments, committedSegmentEditMap),
     [committedSegmentEditMap, segments],
   );
+  const effectiveBackchannelIds = useMemo(
+    () => classifyBackchannels(effectiveSegments, effectiveSegmentEditMap),
+    [effectiveSegmentEditMap, effectiveSegments],
+  );
+  const committedBackchannelIds = useMemo(
+    () => classifyBackchannels(committedSegments, committedSegmentEditMap),
+    [committedSegmentEditMap, committedSegments],
+  );
   const blocks = useMemo(
-    () => buildTranscriptBlocks(committedSegments, speakerNames),
-    [committedSegments, speakerNames],
+    () =>
+      buildTranscriptBlocks(committedSegments, speakerNames, {
+        backchannelIds: committedBackchannelIds,
+        backchannelMode,
+      }),
+    [backchannelMode, committedBackchannelIds, committedSegments, speakerNames],
   );
   const previewBlocks = useMemo(
-    () => buildPreviewBlocks(effectiveSegments, speakerNames),
-    [effectiveSegments, speakerNames],
+    () =>
+      buildPreviewBlocks(
+        effectiveSegments,
+        speakerNames,
+        effectiveBackchannelIds,
+        backchannelMode,
+      ),
+    [backchannelMode, effectiveBackchannelIds, effectiveSegments, speakerNames],
   );
   const markdown = useMemo(
     () => buildTranscriptMarkdown(blocks, { showTimestamps }),
@@ -154,6 +187,10 @@ export function TranscriptMarkdown({
       buildSpeakerLabelOptions(segments, speakerNames, effectiveSegmentEditMap),
     [effectiveSegmentEditMap, segments, speakerNames],
   );
+
+  useEffect(() => {
+    window.localStorage.setItem("transcriptBackchannelMode", backchannelMode);
+  }, [backchannelMode]);
 
   useEffect(() => {
     if (unsavedSegmentCount === 0) {
@@ -584,6 +621,20 @@ export function TranscriptMarkdown({
             />
             タイムスタンプ
           </label>
+          <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+            相槌
+            <select
+              value={backchannelMode}
+              onChange={(event) =>
+                setBackchannelMode(event.target.value as BackchannelMode)
+              }
+              className="min-h-10 rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-900"
+            >
+              <option value="keep">通常</option>
+              <option value="inline">インライン表示</option>
+              <option value="hide">隠す</option>
+            </select>
+          </label>
           <button
             type="button"
             onClick={copyMarkdown}
@@ -719,6 +770,25 @@ export function TranscriptMarkdown({
                         {" "}
                       </a>
                     ))}
+                    {effectiveBackchannelIds.has(segment.id) ? (
+                      <span className="mr-1 rounded-sm bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-800">
+                        相槌
+                      </span>
+                    ) : null}
+                    {segment.mixSuspectBoundarySec !== null &&
+                    segment.mixSuspectBoundarySec !== undefined ? (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          jumpToSegment(segment.id, "edit");
+                        }}
+                        className="mr-1 rounded-sm bg-rose-100 px-1.5 py-0.5 text-xs font-medium text-rose-900"
+                        title="語尾かぶり疑いを編集フォームで確認"
+                      >
+                        語尾かぶり疑い
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       aria-label="このセグメントをスキップ"
@@ -735,6 +805,20 @@ export function TranscriptMarkdown({
                     </button>
                     {" "}
                   </span>
+                ))}
+                {block.absorbedBackchannels.map((backchannel) => (
+                  <button
+                    key={backchannel.segmentId}
+                    type="button"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      jumpToSegment(backchannel.segmentId, "edit");
+                    }}
+                    className="mx-1 inline rounded-sm bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 transition hover:bg-amber-50 hover:text-zinc-800"
+                    title={`相槌セグメントへ移動 (${formatTimestamp(backchannel.startSec)})`}
+                  >
+                    ({backchannel.speakerName}: {backchannel.text})
+                  </button>
                 ))}
               </span>
             </p>
@@ -781,6 +865,12 @@ export function TranscriptMarkdown({
       <div className="mt-8 space-y-3">
         {segments.map((segment) => {
           const edit = effectiveSegmentEditMap[segment.id];
+          const effectiveSegment = effectiveSegments.find(
+            (item) => item.id === segment.id,
+          );
+          const isBackchannel =
+            effectiveSegment !== undefined &&
+            effectiveBackchannelIds.has(segment.id);
 
           return (
             <SegmentEditForm
@@ -794,6 +884,7 @@ export function TranscriptMarkdown({
                   : null
               }
               isHighlighted={highlightedEditSegmentId === segment.id}
+              isBackchannel={isBackchannel}
               jobId={jobId}
               onJumpToPreview={() => jumpToSegment(segment.id, "preview")}
               onLocalEditChange={(updater) =>
@@ -825,6 +916,7 @@ const SEGMENT_SWIPE_MAX_OFFSET_PX = 100;
 
 type SegmentEditFormProps = {
   edit?: SegmentEdit;
+  isBackchannel: boolean;
   isHighlighted: boolean;
   jobId: string;
   onJumpToPreview: () => void;
@@ -842,6 +934,7 @@ type SegmentEditFormProps = {
 
 function SegmentEditForm({
   edit,
+  isBackchannel,
   isHighlighted,
   jobId,
   onJumpToPreview,
@@ -1325,6 +1418,22 @@ function SegmentEditForm({
                 skip
               </span>
             ) : null}
+            {isBackchannel ? (
+              <span className="rounded-md bg-violet-100 px-2 py-1 text-xs font-medium text-violet-800">
+                相槌
+              </span>
+            ) : null}
+            {segment.mixSuspectBoundarySec !== null &&
+            segment.mixSuspectBoundarySec !== undefined ? (
+              <span className="rounded-md bg-rose-100 px-2 py-1 text-xs font-medium text-rose-900">
+                語尾かぶり疑い
+                {segment.mixSuspectSpeakerLabel
+                  ? `: ${speakerNames[segment.mixSuspectSpeakerLabel] || segment.mixSuspectSpeakerLabel}`
+                  : ""}
+                {" / "}
+                {formatTimestamp(segment.mixSuspectBoundarySec)}-
+              </span>
+            ) : null}
           </div>
           <p className="mt-1 break-all font-mono text-xs text-zinc-500">
             original: {segment.speakerLabel}
@@ -1687,23 +1796,56 @@ function buildSpeakerLabelOptions(
 function buildPreviewBlocks(
   segments: TranscriptSegment[],
   speakerNames: SpeakerNameMap,
+  backchannelIds: Set<string>,
+  backchannelMode: BackchannelMode,
 ) {
   const blocks: Array<{
+    absorbedBackchannels: Array<{
+      segmentId: string;
+      speakerLabel: string;
+      speakerName: string;
+      startSec: number;
+      text: string;
+    }>;
     speakerLabel: string;
     speakerName: string;
     startSec: number;
     segments: TranscriptSegment[];
   }> = [];
+  const pendingBackchannels: Array<{
+    segmentId: string;
+    speakerLabel: string;
+    speakerName: string;
+    startSec: number;
+    text: string;
+  }> = [];
 
   for (const segment of segments) {
+    if (backchannelMode !== "keep" && backchannelIds.has(segment.id)) {
+      if (backchannelMode === "inline") {
+        pendingBackchannels.push({
+          segmentId: segment.id,
+          speakerLabel: segment.speakerLabel,
+          speakerName: speakerNames[segment.speakerLabel] || segment.speakerLabel,
+          startSec: segment.startSec,
+          text: segment.text.replace(/\s+/g, " ").trim(),
+        });
+      }
+
+      continue;
+    }
+
     const previous = blocks.at(-1);
 
     if (previous && previous.speakerLabel === segment.speakerLabel) {
       previous.segments.push(segment);
+      previous.absorbedBackchannels.push(...pendingBackchannels);
+      pendingBackchannels.length = 0;
       continue;
     }
 
     blocks.push({
+      absorbedBackchannels: pendingBackchannels.splice(0),
       speakerLabel: segment.speakerLabel,
       speakerName: speakerNames[segment.speakerLabel] || segment.speakerLabel,
       startSec: segment.startSec,

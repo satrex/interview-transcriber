@@ -1,4 +1,5 @@
 import type { TranscriptSegment } from "@/lib/transcript";
+import { isFillerOnlyText } from "@/lib/backchannel";
 
 export type SpeakerAnalysis = {
   expectedSpeakerCount: number;
@@ -23,23 +24,6 @@ export type NoiseSpeakerCandidate = SpeakerStats & {
 
 const MIN_SPEAKER_DURATION_SECONDS = 3;
 const MIN_SPEAKER_SEGMENT_COUNT = 3;
-
-const FILLER_PATTERNS = [
-  /^h+m+$/i,
-  /^h+u*m+$/i,
-  /^u+h+$/i,
-  /^u+m+$/i,
-  /^a+h+$/i,
-  /^え+$/,
-  /^えー+$/,
-  /^えっと+$/,
-  /^あ+$/,
-  /^あー+$/,
-  /^うん+$/,
-  /^ん+$/,
-  /^はい+$/,
-  /^まあ+$/,
-];
 
 export function analyzeSpeakers(
   segments: TranscriptSegment[],
@@ -140,24 +124,6 @@ function buildNoiseCandidateReasons(stats: SpeakerStats) {
 
 function countCharacters(text: string) {
   return text.replace(/\s+/g, "").length;
-}
-
-function isFillerOnlyText(text: string) {
-  const tokens = text
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[、。,.!?！？…・「」『』（）()"'“”‘’:：;；\[\]【】]/g, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter(Boolean);
-
-  if (tokens.length === 0) {
-    return false;
-  }
-
-  return tokens.every((token) =>
-    FILLER_PATTERNS.some((pattern) => pattern.test(token)),
-  );
 }
 
 function roundDuration(seconds: number) {
