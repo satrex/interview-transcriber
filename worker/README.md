@@ -10,7 +10,7 @@ The worker:
 - Safely retries failed or stale jobs up to 3 attempts
 - Downloads the source audio from Supabase Storage
 - Runs `ffprobe` to read audio metadata
-- Splits audio into 10-minute chunks with `ffmpeg`
+- Splits audio into 5-minute chunks with `ffmpeg`
 - Sends each chunk to the OpenAI Transcription API
 - Saves diarized segments into `transcription_segments`
 - Updates job progress after each chunk
@@ -43,12 +43,12 @@ WORKER_TMP_DIR=/tmp/interview-transcriber
 FFMPEG_PATH=ffmpeg
 FFPROBE_PATH=ffprobe
 FFMPEG_TIMEOUT_SECONDS=1800
-AUDIO_CHUNK_SECONDS=600
+AUDIO_CHUNK_SECONDS=300
 WORKER_DOWNLOAD_TIMEOUT_SECONDS=900
 
 OPENAI_API_KEY=
 OPENAI_TRANSCRIPTION_MODEL=gpt-4o-transcribe-diarize
-OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS=1200
+OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS=1800
 SPEAKER_PAN_RELABEL_ENABLED=true
 SPEAKER_REFERENCES_ENABLED=true
 SPEAKER_MIX_RESPLIT_ENABLED=false
@@ -73,13 +73,13 @@ OpenAI transcription API failures are classified separately from job attempts. T
 
 - `quota_exceeded`: billing/quota 429, including `insufficient_quota`, is not retried. The job is marked `failed`.
 - `unsupported_prompt_for_diarization`: an incompatible prompt/model request is not retried. The job is marked `failed`.
-- `openai_timeout`: a timed-out chunk is retried once after 5 seconds, then the job is requeued.
+- `openai_timeout`: a timed-out chunk is retried up to twice after 15 seconds and 30 seconds, then the job is requeued.
 - `rate_limited`: non-quota 429 is retried inside the chunk call after 30 seconds and 60 seconds, then the job is requeued.
 - `openai_error`: other OpenAI API errors are retried inside the chunk call up to 3 times, then the job is requeued.
 
 Requeued OpenAI failures are attempted up to `WORKER_MAX_ATTEMPTS`; the final failed job retains its specific `error_code`. `attempt_count` means the number of times a worker claimed the job. Chunk-level OpenAI retries do not increment it.
 
-If transcription still exceeds `OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS=1200` on the target VPS, reduce `AUDIO_CHUNK_SECONDS` to `300` so each request contains five minutes of audio.
+The recommended defaults are `AUDIO_CHUNK_SECONDS=300` and `OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS=1800`. If transcription still exceeds the timeout on the target VPS, reduce `AUDIO_CHUNK_SECONDS` further so each request contains less audio.
 
 ## Speaker Identity
 

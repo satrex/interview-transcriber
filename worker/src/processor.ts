@@ -214,6 +214,16 @@ export async function processJob(
     for (const chunk of chunks) {
       const chunkStartSec = chunk.chunkIndex * config.audioChunkSeconds;
 
+      if (chunk.bytes > 25 * 1024 * 1024) {
+        throw new FinalJobFailure(
+          `Audio chunk ${chunk.chunkIndex} is ${chunk.bytes} bytes, which exceeds OpenAI's 25 MB file limit. AUDIO_CHUNK_SECONDS を下げてください。`,
+          {
+            errorCode: "processing_error",
+            processedAudioSeconds,
+          },
+        );
+      }
+
       console.log(
         `[worker] transcribing chunk ${chunk.chunkIndex} starting at ${chunkStartSec}s`,
       );

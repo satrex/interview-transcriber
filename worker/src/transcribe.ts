@@ -131,6 +131,8 @@ async function createTranscriptionWithRetry(options: {
   const useDiarization = true;
 
   while (true) {
+    const startedAt = Date.now();
+
     try {
       const request: TranscriptionCreateParamsNonStreaming = {
         file: createReadStream(options.chunk.path),
@@ -153,10 +155,16 @@ async function createTranscriptionWithRetry(options: {
         );
       }
 
-      return (await options.openai.audio.transcriptions.create(
+      const transcription = (await options.openai.audio.transcriptions.create(
         request,
       )) as DiarizedTranscriptionResponse;
+      const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+      console.log(
+        `[worker] chunk ${options.chunk.chunkIndex} transcribed in ${elapsedSeconds}s (${options.chunk.bytes} bytes)`,
+      );
+      return transcription;
     } catch (error) {
+      const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
       const classification = classifyOpenAITranscriptionError(error);
 
       if (!classification.retryable || attempt >= classification.maxAttempts) {
@@ -168,7 +176,7 @@ async function createTranscriptionWithRetry(options: {
 
       const delayMs = classification.delayMs(attempt);
       console.warn(
-        `[worker] OpenAI transcription ${classification.errorCode} for chunk ${options.chunk.chunkIndex}; retrying attempt ${attempt + 1}/${classification.maxAttempts} in ${delayMs}ms: ${formatErrorMessage(error)}`,
+        `[worker] OpenAI transcription ${classification.errorCode} for chunk ${options.chunk.chunkIndex} failed after ${elapsedSeconds}s; retrying attempt ${attempt + 1}/${classification.maxAttempts} in ${delayMs}ms: ${formatErrorMessage(error)}`,
       );
       await sleep(delayMs);
       attempt += 1;
@@ -235,9 +243,9 @@ function classifyOpenAITranscriptionError(error: unknown): {
     message.includes("request timed out")
   ) {
     return {
-      delayMs: () => 5_000,
+      delayMs: (attempt) => attempt * 15_000,
       errorCode: "openai_timeout",
-      maxAttempts: 2,
+      maxAttempts: 3,
       retryable: true,
     };
   }
