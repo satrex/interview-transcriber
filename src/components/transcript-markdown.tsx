@@ -5,6 +5,8 @@ import {
   type FormEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -109,8 +111,9 @@ export function TranscriptMarkdown({
   );
   const [effectiveSegmentEditMap, setEffectiveSegmentEditMap] =
     useState<SegmentEditMap>(segmentEdits);
-  const [committedSegmentEditMap, setCommittedSegmentEditMap] =
-    useState<SegmentEditMap>(segmentEdits);
+  // Export (copy/download) only needs the committed edits at click time, so a
+  // ref avoids re-rendering every segment form on each save completion.
+  const committedSegmentEditMapRef = useRef<SegmentEditMap>(segmentEdits);
   const [previewSkipPendingIds, setPreviewSkipPendingIds] = useState<
     Record<string, boolean>
   >({});
@@ -135,25 +138,9 @@ export function TranscriptMarkdown({
     () => buildEffectiveSegments(segments, effectiveSegmentEditMap),
     [effectiveSegmentEditMap, segments],
   );
-  const committedSegments = useMemo(
-    () => buildEffectiveSegments(segments, committedSegmentEditMap),
-    [committedSegmentEditMap, segments],
-  );
   const effectiveBackchannelIds = useMemo(
     () => classifyBackchannels(effectiveSegments, effectiveSegmentEditMap),
     [effectiveSegmentEditMap, effectiveSegments],
-  );
-  const committedBackchannelIds = useMemo(
-    () => classifyBackchannels(committedSegments, committedSegmentEditMap),
-    [committedSegmentEditMap, committedSegments],
-  );
-  const blocks = useMemo(
-    () =>
-      buildTranscriptBlocks(committedSegments, speakerNames, {
-        backchannelIds: committedBackchannelIds,
-        backchannelMode,
-      }),
-    [backchannelMode, committedBackchannelIds, committedSegments, speakerNames],
   );
   const previewBlocks = useMemo(
     () =>
@@ -165,14 +152,6 @@ export function TranscriptMarkdown({
       ),
     [backchannelMode, effectiveBackchannelIds, effectiveSegments, speakerNames],
   );
-  const markdown = useMemo(
-    () => buildTranscriptMarkdown(blocks, { showTimestamps }),
-    [blocks, showTimestamps],
-  );
-  const plainText = useMemo(
-    () => buildTranscriptText(blocks, { showTimestamps }),
-    [blocks, showTimestamps],
-  );
   const safeExportBaseName = buildSafeFileName(exportBaseName);
   const unsavedSegmentIds = useMemo(
     () =>
@@ -182,11 +161,24 @@ export function TranscriptMarkdown({
     [unsavedSegments],
   );
   const unsavedSegmentCount = unsavedSegmentIds.length;
-  const speakerLabels = useMemo(
-    () =>
-      buildSpeakerLabelOptions(segments, speakerNames, effectiveSegmentEditMap),
-    [effectiveSegmentEditMap, segments, speakerNames],
+  // Keep the array identity stable while its contents are unchanged so that
+  // memoized segment forms do not re-render on every edit-map update.
+  const speakerLabels = useStableStringArray(
+    useMemo(
+      () =>
+        buildSpeakerLabelOptions(segments, speakerNames, effectiveSegmentEditMap),
+      [effectiveSegmentEditMap, segments, speakerNames],
+    ),
   );
+  const playSegmentRef = useRef(playSegment);
+
+  useEffect(() => {
+    playSegmentRef.current = playSegment;
+  });
+
+  const handlePlaySegment = useCallback((segment: TranscriptSegment) => {
+    void playSegmentRef.current(segment);
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem("transcriptBackchannelMode", backchannelMode);
@@ -249,9 +241,27 @@ export function TranscriptMarkdown({
     };
   }, []);
 
+  function buildExportBlocks() {
+    const committedSegments = buildEffectiveSegments(
+      segments,
+      committedSegmentEditMapRef.current,
+    );
+    const committedBackchannelIds = classifyBackchannels(
+      committedSegments,
+      committedSegmentEditMapRef.current,
+    );
+
+    return buildTranscriptBlocks(committedSegments, speakerNames, {
+      backchannelIds: committedBackchannelIds,
+      backchannelMode,
+    });
+  }
+
   async function copyMarkdown() {
     try {
-      await navigator.clipboard.writeText(markdown);
+      await navigator.clipboard.writeText(
+        buildTranscriptMarkdown(buildExportBlocks(), { showTimestamps }),
+      );
       setCopyStatus("copied");
     } catch {
       setCopyStatus("failed");
@@ -259,57 +269,73 @@ export function TranscriptMarkdown({
   }
 
   function downloadMarkdown() {
-    downloadTextFile(`${safeExportBaseName}.md`, markdown, "text/markdown");
+    downloadTextFile(
+      `${safeExportBaseName}.md`,
+      buildTranscriptMarkdown(buildExportBlocks(), { showTimestamps }),
+      "text/markdown",
+    );
   }
 
   function downloadPlainText() {
-    downloadTextFile(`${safeExportBaseName}.txt`, plainText, "text/plain");
+    downloadTextFile(
+      `${safeExportBaseName}.txt`,
+      buildTranscriptText(buildExportBlocks(), { showTimestamps }),
+      "text/plain",
+    );
   }
 
-  function updateSegmentUnsaved(segmentId: string, isUnsaved: boolean) {
-    setUnsavedSegments((current) => {
-      if (Boolean(current[segmentId]) === isUnsaved) {
-        return current;
-      }
+  const updateSegmentUnsaved = useCallback(
+    (segmentId: string, isUnsaved: boolean) => {
+      setUnsavedSegments((current) => {
+        if (Boolean(current[segmentId]) === isUnsaved) {
+          return current;
+        }
 
-      const next = { ...current };
+        const next = { ...current };
 
-      if (isUnsaved) {
-        next[segmentId] = true;
-      } else {
-        delete next[segmentId];
-      }
+        if (isUnsaved) {
+          next[segmentId] = true;
+        } else {
+          delete next[segmentId];
+        }
 
-      return next;
-    });
-  }
+        return next;
+      });
+    },
+    [],
+  );
 
-  function updateLocalSegmentEdit(
-    segmentId: string,
-    updater: (current: SegmentEdit | undefined) => SegmentEdit,
-  ) {
-    setEffectiveSegmentEditMap((current) => ({
-      ...current,
-      [segmentId]: updater(current[segmentId]),
-    }));
-  }
+  const updateLocalSegmentEdit = useCallback(
+    (
+      segmentId: string,
+      updater: (current: SegmentEdit | undefined) => SegmentEdit,
+    ) => {
+      setEffectiveSegmentEditMap((current) => ({
+        ...current,
+        [segmentId]: updater(current[segmentId]),
+      }));
+    },
+    [],
+  );
 
-  function commitLocalSegmentEdit(
-    segmentId: string,
-    edit: SegmentEdit,
-  ) {
-    setCommittedSegmentEditMap((current) => ({
-      ...current,
-      [segmentId]: edit,
-    }));
-  }
+  const commitLocalSegmentEdit = useCallback(
+    (segmentId: string, edit: SegmentEdit) => {
+      committedSegmentEditMapRef.current = {
+        ...committedSegmentEditMapRef.current,
+        [segmentId]: edit,
+      };
+    },
+    [],
+  );
 
   function updateSegmentSkipState(segmentId: string, isSkipped: boolean) {
     setEffectiveSegmentEditMap((current) =>
       setSegmentSkipInEditMap(current, segmentId, isSkipped),
     );
-    setCommittedSegmentEditMap((current) =>
-      setSegmentSkipInEditMap(current, segmentId, isSkipped),
+    committedSegmentEditMapRef.current = setSegmentSkipInEditMap(
+      committedSegmentEditMapRef.current,
+      segmentId,
+      isSkipped,
     );
   }
 
@@ -427,7 +453,9 @@ export function TranscriptMarkdown({
           };
 
           setEffectiveSegmentEditMap(applySavedText);
-          setCommittedSegmentEditMap(applySavedText);
+          committedSegmentEditMapRef.current = applySavedText(
+            committedSegmentEditMapRef.current,
+          );
           setSegmentFormRevisions((current) => {
             const next = { ...current };
 
@@ -516,31 +544,41 @@ export function TranscriptMarkdown({
     setSkipToast(null);
   }
 
-  function jumpToSegment(segmentId: string, target: "edit" | "preview") {
-    const element = document.getElementById(
-      target === "edit"
-        ? getSegmentEditDomId(segmentId)
-        : getSegmentPreviewDomId(segmentId),
-    );
+  const jumpToSegment = useCallback(
+    (segmentId: string, target: "edit" | "preview") => {
+      const element = document.getElementById(
+        target === "edit"
+          ? getSegmentEditDomId(segmentId)
+          : getSegmentPreviewDomId(segmentId),
+      );
 
-    if (!element) {
-      return;
-    }
+      if (!element) {
+        return;
+      }
 
-    if (highlightTimeoutRef.current) {
-      clearTimeout(highlightTimeoutRef.current);
-    }
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
 
-    setHighlightedEditSegmentId(target === "edit" ? segmentId : null);
-    setHighlightedPreviewSegmentId(target === "preview" ? segmentId : null);
-    element.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedEditSegmentId(target === "edit" ? segmentId : null);
+      setHighlightedPreviewSegmentId(target === "preview" ? segmentId : null);
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
 
-    highlightTimeoutRef.current = setTimeout(() => {
-      setHighlightedEditSegmentId(null);
-      setHighlightedPreviewSegmentId(null);
-      highlightTimeoutRef.current = null;
-    }, 3000);
-  }
+      highlightTimeoutRef.current = setTimeout(() => {
+        setHighlightedEditSegmentId(null);
+        setHighlightedPreviewSegmentId(null);
+        highlightTimeoutRef.current = null;
+      }, 3000);
+    },
+    [],
+  );
+
+  const handleJumpToPreview = useCallback(
+    (segmentId: string) => {
+      jumpToSegment(segmentId, "preview");
+    },
+    [jumpToSegment],
+  );
 
   function jumpToSpeakerSetting(speakerLabel: string) {
     const speakerSettingElement = document.getElementById(
@@ -863,44 +901,28 @@ export function TranscriptMarkdown({
       ) : null}
 
       <div className="mt-8 space-y-3">
-        {segments.map((segment) => {
-          const edit = effectiveSegmentEditMap[segment.id];
-          const effectiveSegment = effectiveSegments.find(
-            (item) => item.id === segment.id,
-          );
-          const isBackchannel =
-            effectiveSegment !== undefined &&
-            effectiveBackchannelIds.has(segment.id);
-
-          return (
-            <SegmentEditForm
-              key={`${segment.id}-${Boolean(edit?.isSkipped)}-${
-                segmentFormRevisions[segment.id] || 0
-              }`}
-              edit={edit}
-              playbackStatus={
-                playbackState?.segmentId === segment.id
-                  ? playbackState.status
-                  : null
-              }
-              isHighlighted={highlightedEditSegmentId === segment.id}
-              isBackchannel={isBackchannel}
-              jobId={jobId}
-              onJumpToPreview={() => jumpToSegment(segment.id, "preview")}
-              onLocalEditChange={(updater) =>
-                updateLocalSegmentEdit(segment.id, updater)
-              }
-              onPlay={() => void playSegment(segment)}
-              onSaveCommit={(savedEdit) =>
-                commitLocalSegmentEdit(segment.id, savedEdit)
-              }
-              onUnsavedChange={updateSegmentUnsaved}
-              segment={segment}
-              speakerLabels={speakerLabels}
-              speakerNames={speakerNames}
-            />
-          );
-        })}
+        {segments.map((segment) => (
+          <SegmentEditForm
+            key={`${segment.id}-${segmentFormRevisions[segment.id] || 0}`}
+            edit={effectiveSegmentEditMap[segment.id]}
+            playbackStatus={
+              playbackState?.segmentId === segment.id
+                ? playbackState.status
+                : null
+            }
+            isHighlighted={highlightedEditSegmentId === segment.id}
+            isBackchannel={effectiveBackchannelIds.has(segment.id)}
+            jobId={jobId}
+            onJumpToPreview={handleJumpToPreview}
+            onLocalEditChange={updateLocalSegmentEdit}
+            onPlay={handlePlaySegment}
+            onSaveCommit={commitLocalSegmentEdit}
+            onUnsavedChange={updateSegmentUnsaved}
+            segment={segment}
+            speakerLabels={speakerLabels}
+            speakerNames={speakerNames}
+          />
+        ))}
       </div>
     </section>
   );
@@ -919,12 +941,13 @@ type SegmentEditFormProps = {
   isBackchannel: boolean;
   isHighlighted: boolean;
   jobId: string;
-  onJumpToPreview: () => void;
+  onJumpToPreview: (segmentId: string) => void;
   onLocalEditChange: (
+    segmentId: string,
     updater: (current: SegmentEdit | undefined) => SegmentEdit,
   ) => void;
-  onPlay: () => void;
-  onSaveCommit: (savedEdit: SegmentEdit) => void;
+  onPlay: (segment: TranscriptSegment) => void;
+  onSaveCommit: (segmentId: string, savedEdit: SegmentEdit) => void;
   onUnsavedChange: (segmentId: string, isUnsaved: boolean) => void;
   playbackStatus: "preparing" | "playing" | null;
   segment: TranscriptSegment;
@@ -932,7 +955,7 @@ type SegmentEditFormProps = {
   speakerNames: SpeakerNameMap;
 };
 
-function SegmentEditForm({
+const SegmentEditForm = memo(function SegmentEditForm({
   edit,
   isBackchannel,
   isHighlighted,
@@ -989,7 +1012,7 @@ function SegmentEditForm({
   const isPreparing = playbackStatus === "preparing";
   const isSaving = pending || skipPending || speakerPending;
   const swipe = useSwipeSegmentAction({
-    onSwipeLeft: onPlay,
+    onSwipeLeft: () => onPlay(segment),
     onSwipeRight: () => {
       if (!skipPending) {
         void updateSkippedValue(!skippedValue);
@@ -1004,6 +1027,12 @@ function SegmentEditForm({
       }
     };
   }, []);
+
+  // Skip state can also change from the preview's x button; follow the parent
+  // edit map instead of remounting the whole form.
+  useEffect(() => {
+    setSkippedValue(isSkipped);
+  }, [isSkipped]);
 
   function updateTextValue(nextText: string) {
     setTextValue(nextText);
@@ -1045,7 +1074,7 @@ function SegmentEditForm({
     setSpeakerPending(true);
     setSpeakerActionState({ error: null, success: false });
     setRecentSaveStatus(null);
-    onLocalEditChange((current) => ({
+    onLocalEditChange(segment.id, (current) => ({
       editedText: current ? current.editedText : savedEditedText,
       speakerOverride:
         nextSpeakerLabel !== segment.speakerLabel ? nextSpeakerLabel : null,
@@ -1074,7 +1103,7 @@ function SegmentEditForm({
       const rollbackSpeakerLabel = committedSpeakerLabelRef.current;
 
       setSpeakerValue(rollbackSpeakerLabel);
-      onLocalEditChange(() => previousEdit);
+      onLocalEditChange(segment.id, () => previousEdit);
       debugSegmentSaveMetric("speaker:error", {
         clientElapsedMs: Math.round(performance.now() - clientStartedAt),
         requestId,
@@ -1099,12 +1128,12 @@ function SegmentEditForm({
     setSavedSpeakerOverride(nextSavedSpeakerOverride);
     setSpeakerValue(nextSavedSpeakerLabel);
     setSkippedValue(nextSavedSkipped);
-    onLocalEditChange(() => ({
+    onLocalEditChange(segment.id, () => ({
       editedText: nextSavedEditedText,
       speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
     }));
-    onSaveCommit({
+    onSaveCommit(segment.id, {
       editedText: nextSavedEditedText,
       speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
@@ -1138,7 +1167,7 @@ function SegmentEditForm({
     setSkipPending(true);
     setSkipActionState({ error: null, success: false });
     setRecentSaveStatus(null);
-    onLocalEditChange((current) => ({
+    onLocalEditChange(segment.id, (current) => ({
       editedText: current ? current.editedText : savedEditedText,
       speakerOverride: current ? current.speakerOverride : savedSpeakerOverride,
       isSkipped: nextSkipped,
@@ -1167,7 +1196,7 @@ function SegmentEditForm({
 
     if (!result.success) {
       setSkippedValue(previousSkipped);
-      onLocalEditChange(() => previousEdit);
+      onLocalEditChange(segment.id, () => previousEdit);
       debugSegmentSaveMetric("skip:error", {
         clientElapsedMs: Math.round(performance.now() - clientStartedAt),
         requestId,
@@ -1189,12 +1218,12 @@ function SegmentEditForm({
     setSavedSpeakerOverride(nextSavedSpeakerOverride);
     setSpeakerValue(nextSavedSpeakerLabel);
     setSkippedValue(nextSavedSkipped);
-    onLocalEditChange(() => ({
+    onLocalEditChange(segment.id, () => ({
       editedText: nextSavedEditedText,
       speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
     }));
-    onSaveCommit({
+    onSaveCommit(segment.id, {
       editedText: nextSavedEditedText,
       speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
@@ -1256,7 +1285,7 @@ function SegmentEditForm({
     setTextValue(optimisticText);
     setSpeakerValue(optimisticSpeakerLabel);
     committedSpeakerLabelRef.current = optimisticSpeakerLabel;
-    onLocalEditChange(() => ({
+    onLocalEditChange(segment.id, () => ({
       editedText: optimisticEditedText,
       speakerOverride: optimisticSpeakerOverride,
       isSkipped: skippedValue,
@@ -1283,7 +1312,7 @@ function SegmentEditForm({
       setSavedEditedText(previousSavedEditedText);
       setSavedSpeakerOverride(previousSavedSpeakerOverride);
       committedSpeakerLabelRef.current = previousSpeakerLabel;
-      onLocalEditChange(() => previousEdit);
+      onLocalEditChange(segment.id, () => previousEdit);
       onUnsavedChange(segment.id, previousTextValue !== savedText);
       debugSegmentSaveMetric("text:error", {
         clientElapsedMs: Math.round(performance.now() - clientStartedAt),
@@ -1311,12 +1340,12 @@ function SegmentEditForm({
     setTextValue(nextSavedText);
     setSpeakerValue(nextSavedSpeakerLabel);
     setSkippedValue(nextSavedSkipped);
-    onLocalEditChange(() => ({
+    onLocalEditChange(segment.id, () => ({
       editedText: nextSavedEditedText,
       speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
     }));
-    onSaveCommit({
+    onSaveCommit(segment.id, {
       editedText: nextSavedEditedText,
       speakerOverride: nextSavedSpeakerOverride,
       isSkipped: nextSavedSkipped,
@@ -1361,7 +1390,7 @@ function SegmentEditForm({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
             <button
               type="button"
-              onClick={onPlay}
+              onClick={() => onPlay(segment)}
               disabled={isPreparing}
               className={`inline-flex min-h-9 items-center justify-center rounded-md px-3 text-sm font-semibold transition ${
                 isPlayingOrPreparing
@@ -1378,7 +1407,7 @@ function SegmentEditForm({
                 event.preventDefault();
 
                 if (!skippedValue) {
-                  onJumpToPreview();
+                  onJumpToPreview(segment.id);
                 }
               }}
               className={`inline-flex min-h-9 items-center justify-center rounded-md border px-3 text-sm font-semibold transition ${
@@ -1556,7 +1585,7 @@ function SegmentEditForm({
       </div>
     </form>
   );
-}
+});
 
 function useSwipeSegmentAction({
   onSwipeLeft,
@@ -1711,6 +1740,20 @@ function useSwipeSegmentAction({
     },
     style,
   };
+}
+
+function useStableStringArray(value: string[]) {
+  const ref = useRef(value);
+
+  if (
+    ref.current !== value &&
+    (ref.current.length !== value.length ||
+      value.some((item, index) => item !== ref.current[index]))
+  ) {
+    ref.current = value;
+  }
+
+  return ref.current;
 }
 
 function isInteractiveSwipeTarget(target: EventTarget) {
