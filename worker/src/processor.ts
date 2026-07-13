@@ -32,11 +32,14 @@ import {
 } from "./speaker-references.js";
 import {
   createOpenAIClient,
+  isDiarizeContentFailure,
   NEW_SPEAKER_LABEL_PREFIX,
   OpenAITranscriptionError,
   type NormalizedSegment,
+  type TranscribedChunk,
   transcribeChunk,
 } from "./transcribe.js";
+import { transcribeChunkWithDiarizeFallback } from "./diarize-fallback.js";
 import { formatErrorMessage } from "./retry.js";
 
 export class PermanentJobFailure extends Error {
@@ -286,25 +289,47 @@ export async function processJob(
 
       await touchJobLock(supabase, job);
 
-      const transcribed = await transcribeChunkWithOptionalReferences({
-        openai,
-        model: config.openaiTranscriptionModel,
-        chunk,
-        chunkStartSec,
-        promptSuffix: termDictionaryPrompt,
-        knownSpeakers:
-          speakerReferencesEnabled && knownSpeakers.length > 0
-            ? knownSpeakers
-            : undefined,
-        disableReferences() {
-          speakerReferencesEnabled = false;
-        },
-      }).catch((error) => {
-        console.error(
-          `[worker] transcription API failed for job ${job.id} chunk ${chunk.chunkIndex}: ${formatErrorMessage(error)}`,
+      let chunkUsedFallback = false;
+      let transcribed: TranscribedChunk;
+      try {
+        transcribed = await transcribeChunkWithOptionalReferences({
+          openai,
+          model: config.openaiTranscriptionModel,
+          chunk,
+          chunkStartSec,
+          promptSuffix: termDictionaryPrompt,
+          knownSpeakers:
+            speakerReferencesEnabled && knownSpeakers.length > 0
+              ? knownSpeakers
+              : undefined,
+          disableReferences() {
+            speakerReferencesEnabled = false;
+          },
+        });
+      } catch (error) {
+        if (!isDiarizeContentFailure(error)) {
+          console.error(
+            `[worker] transcription API failed for job ${job.id} chunk ${chunk.chunkIndex}: ${formatErrorMessage(error)}`,
+          );
+          throw error;
+        }
+
+        console.warn(
+          `[worker] chunk ${chunk.chunkIndex} failed with 5xx; falling back to ${config.diarizeFallbackSubchunkSeconds}s sub-chunks. ${formatErrorMessage(error)}`,
         );
-        throw error;
-      });
+        transcribed = await transcribeChunkWithDiarizeFallback({
+          openai,
+          config,
+          job,
+          chunk,
+          chunkStartSec,
+          promptSuffix: termDictionaryPrompt,
+          fallbackDir: `${downloaded.jobTmpDir}/fallback`,
+          assertHealthy: () => heartbeat.assertHealthy(),
+        });
+        chunkUsedFallback = true;
+      }
+
       const segments = assignDisplayLabels(transcribed.segments, {
         knownSpeakers,
         apiNewLabelToDisplayLabel,
@@ -331,7 +356,7 @@ export async function processJob(
       await saveSegments(supabase, job.id, job.user_id, segments);
       allSegments.push(...segments);
 
-      if (speakerReferencesEnabled && knownSpeakers.length < 4) {
+      if (speakerReferencesEnabled && !chunkUsedFallback && knownSpeakers.length < 4) {
         await addSpeakerReferencesFromChunk({
           config,
           chunkPath: chunk.path,

@@ -5,7 +5,9 @@ import type { SegmentPan } from "./pan.js";
 import type { NormalizedSegment } from "./transcribe.js";
 
 const MIN_REFERENCE_SEC = 3;
-const MAX_REFERENCE_SEC = 10;
+// API accepts 1.2–10.0s; clamp below 10.0 because ffmpeg -t can overshoot the
+// requested length slightly at frame boundaries and get the reference rejected.
+const MAX_REFERENCE_SEC = 9.5;
 const MAX_KNOWN_SPEAKERS = 4;
 
 export type KnownSpeaker = {

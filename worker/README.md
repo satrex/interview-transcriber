@@ -44,6 +44,7 @@ FFMPEG_PATH=ffmpeg
 FFPROBE_PATH=ffprobe
 FFMPEG_TIMEOUT_SECONDS=1800
 AUDIO_CHUNK_SECONDS=300
+DIARIZE_FALLBACK_SUBCHUNK_SECONDS=75
 WORKER_DOWNLOAD_TIMEOUT_SECONDS=900
 
 OPENAI_API_KEY=
@@ -81,6 +82,10 @@ OpenAI transcription API failures are classified separately from job attempts. T
 Requeued OpenAI failures are attempted up to `WORKER_MAX_ATTEMPTS`; the final failed job retains its specific `error_code`. `attempt_count` means the number of times a worker claimed the job. Chunk-level OpenAI retries do not increment it.
 
 The recommended defaults are `AUDIO_CHUNK_SECONDS=300` and `OPENAI_TRANSCRIPTION_TIMEOUT_SECONDS=1800`. If transcription still exceeds the timeout on the target VPS, reduce `AUDIO_CHUNK_SECONDS` further so each request contains less audio.
+
+### Diarize 5xx content fallback
+
+Some audio content deterministically makes the diarization model fail with an HTTP 5xx (or hang into a timeout) no matter how many times it is retried — typically overlap-heavy stretches with many back-channel responses. When a chunk exhausts its 5xx/timeout retries, the worker does not fail the job immediately. Instead it re-splits that chunk into `DIARIZE_FALLBACK_SUBCHUNK_SECONDS` (default 75) sub-chunks and transcribes each one with the same diarization model. Any sub-chunk that still fails the same way falls back to `whisper-1` (no diarization), producing text-only segments whose speaker labels need manual review. Only if `whisper-1` also fails is the chunk error propagated to requeue the job. Known speaker references are not sent on the fallback path, and a chunk recovered via fallback is not used as a source of new speaker references. The fallback is always on; it does nothing unless a 5xx/timeout actually occurs.
 
 ## Speaker Identity
 

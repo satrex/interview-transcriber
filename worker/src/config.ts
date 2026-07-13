@@ -8,6 +8,7 @@ export type WorkerConfig = {
   ffmpegPath: string;
   ffprobePath: string;
   audioChunkSeconds: number;
+  diarizeFallbackSubchunkSeconds: number;
   openaiApiKey: string;
   openaiTranscriptionModel: string;
   openaiTranscriptionTimeoutSeconds: number;
@@ -35,6 +36,11 @@ export function loadConfig(): WorkerConfig {
       process.env.AUDIO_CHUNK_SECONDS,
       600,
       "AUDIO_CHUNK_SECONDS",
+    ),
+    diarizeFallbackSubchunkSeconds: parsePositiveInteger(
+      process.env.DIARIZE_FALLBACK_SUBCHUNK_SECONDS,
+      75,
+      "DIARIZE_FALLBACK_SUBCHUNK_SECONDS",
     ),
     openaiApiKey: requireEnv("OPENAI_API_KEY"),
     openaiTranscriptionModel:

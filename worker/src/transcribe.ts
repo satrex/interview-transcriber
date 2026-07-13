@@ -40,18 +40,34 @@ export type OpenAITranscriptionErrorCode =
 
 export class OpenAITranscriptionError extends Error {
   readonly errorCode: OpenAITranscriptionErrorCode;
+  readonly status: number | null;
 
   constructor(
     message: string,
     options: {
       cause: unknown;
       errorCode: OpenAITranscriptionErrorCode;
+      status?: number | null;
     },
   ) {
     super(message, { cause: options.cause });
     this.name = "OpenAITranscriptionError";
     this.errorCode = options.errorCode;
+    this.status = options.status ?? null;
   }
+}
+
+/**
+ * True when a chunk failure looks like the deterministic diarize content bug:
+ * the server 500s (or hangs into a timeout) on overlap-heavy audio. These are
+ * not recovered by retry; the caller should fall back to sub-chunking.
+ */
+export function isDiarizeContentFailure(error: unknown): boolean {
+  return (
+    error instanceof OpenAITranscriptionError &&
+    ((error.status !== null && error.status >= 500) ||
+      error.errorCode === "openai_timeout")
+  );
 }
 
 type DiarizedTranscriptionResponse = {
@@ -79,8 +95,52 @@ export async function transcribeChunk(options: {
   promptSuffix?: string | null;
   knownSpeakers?: Array<{ name: string; displayLabel: string; dataUrl: string }>;
 }): Promise<TranscribedChunk> {
-  const transcription = await createTranscriptionWithRetry(options);
+  const transcription = await createTranscriptionWithRetry({
+    ...options,
+    useDiarization: true,
+  });
 
+  return normalizeTranscriptionResponse(transcription, {
+    chunkIndex: options.chunk.chunkIndex,
+    chunkStartSec: options.chunkStartSec,
+    knownSpeakers: options.knownSpeakers,
+  });
+}
+
+/**
+ * Fallback transcription with whisper-1 (verbose_json). Produces no speaker
+ * labels — every segment lands on "unknown" and needs manual speaker review.
+ * Used only when the diarize model deterministically fails on a sub-chunk.
+ */
+export async function transcribeChunkWithWhisper(options: {
+  openai: OpenAI;
+  chunk: AudioChunk;
+  chunkStartSec: number;
+  promptSuffix?: string | null;
+}): Promise<TranscribedChunk> {
+  const transcription = await createTranscriptionWithRetry({
+    openai: options.openai,
+    model: "whisper-1",
+    chunk: options.chunk,
+    promptSuffix: options.promptSuffix,
+    useDiarization: false,
+  });
+
+  return normalizeTranscriptionResponse(transcription, {
+    chunkIndex: options.chunk.chunkIndex,
+    chunkStartSec: options.chunkStartSec,
+    knownSpeakers: undefined,
+  });
+}
+
+function normalizeTranscriptionResponse(
+  transcription: DiarizedTranscriptionResponse,
+  context: {
+    chunkIndex: number;
+    chunkStartSec: number;
+    knownSpeakers?: Array<{ name: string; displayLabel: string; dataUrl: string }>;
+  },
+): TranscribedChunk {
   if (!Array.isArray(transcription.segments)) {
     const error = new Error("OpenAI transcription response did not include segments.");
     throw new OpenAITranscriptionError(error.message, {
@@ -96,9 +156,9 @@ export async function transcribeChunk(options: {
   for (const segment of transcription.segments) {
     const normalized = normalizeSegment(
       segment,
-      options.chunk.chunkIndex,
-      options.chunkStartSec,
-      options.knownSpeakers,
+      context.chunkIndex,
+      context.chunkStartSec,
+      context.knownSpeakers,
     );
 
     if (!normalized) {
@@ -126,9 +186,10 @@ async function createTranscriptionWithRetry(options: {
   chunk: AudioChunk;
   promptSuffix?: string | null;
   knownSpeakers?: Array<{ name: string; dataUrl: string }>;
+  useDiarization: boolean;
 }) {
   let attempt = 1;
-  const useDiarization = true;
+  const useDiarization = options.useDiarization;
 
   while (true) {
     const startedAt = Date.now();
@@ -140,8 +201,11 @@ async function createTranscriptionWithRetry(options: {
         language: TRANSCRIPTION_LANGUAGE,
         response_format: useDiarization ? "diarized_json" : "verbose_json",
         temperature: TRANSCRIPTION_TEMPERATURE,
-        chunking_strategy: "auto",
       };
+
+      if (useDiarization) {
+        request.chunking_strategy = "auto";
+      }
       const promptText = buildTranscriptionPrompt(options.promptSuffix);
 
       if (!useDiarization && promptText) {
@@ -171,6 +235,7 @@ async function createTranscriptionWithRetry(options: {
         throw new OpenAITranscriptionError(formatErrorMessage(error), {
           cause: error,
           errorCode: classification.errorCode,
+          status: extractOpenAIStatus(error),
         });
       }
 
