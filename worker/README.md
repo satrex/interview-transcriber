@@ -75,6 +75,7 @@ OpenAI transcription API failures are classified separately from job attempts. T
 - `unsupported_prompt_for_diarization`: an incompatible prompt/model request is not retried. The job is marked `failed`.
 - `openai_timeout`: a timed-out chunk is retried up to twice after 15 seconds and 30 seconds, then the job is requeued.
 - `rate_limited`: non-quota 429 is retried inside the chunk call after 30 seconds and 60 seconds, then the job is requeued.
+- HTTP 5xx errors (and the server-error response message) use a longer backoff: up to 5 attempts with 30, 60, 90, and 120 second waits, then the job is requeued.
 - `openai_error`: other OpenAI API errors are retried inside the chunk call up to 3 times, then the job is requeued.
 
 Requeued OpenAI failures are attempted up to `WORKER_MAX_ATTEMPTS`; the final failed job retains its specific `error_code`. `attempt_count` means the number of times a worker claimed the job. Chunk-level OpenAI retries do not increment it.
@@ -180,7 +181,9 @@ The Docker image installs `ffmpeg` and runs the same long-lived polling worker.
 
 ## Resetting a Job
 
-To test the same job again, reset it manually in Supabase:
+Normally use the retry button in the UI. It resets a failed job to `queued` while preserving saved transcription segments so the worker can resume after the last saved chunk. The project-part retry endpoint follows the same behavior.
+
+Manual SQL is intended for development/debugging only:
 
 ```sql
 update transcription_jobs
@@ -199,8 +202,11 @@ set
     updated_at = now()
 where id = '<job-id>';
 
+```
+
+Do not delete `transcription_segments` for a normal retry. If saved segments exist and `audio_chunk_duration_sec` still matches `AUDIO_CHUNK_SECONDS`, the worker logs `resuming job ... from chunk N` and skips completed chunks. If the chunk duration changed, or no segments exist, it clears the job's segments and starts from chunk 0. To intentionally restart completely from the beginning, also run:
+
+```sql
 delete from transcription_segments
 where job_id = '<job-id>';
 ```
-
-Delete existing `transcription_segments` before re-running if the failed job may have partial segments. Segments are treated as source transcript records for a job, so a reset should either remove partial rows first or confirm that the worker will clear and replace them before transcription.

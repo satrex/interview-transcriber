@@ -1,4 +1,6 @@
 import { NextRequest } from "next/server";
+import { createAdminSupabaseClient } from "@/lib/supabase/admin";
+import { resetFailedJob } from "@/lib/jobs/reset";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 export async function POST(req: NextRequest, context: { params: Promise<{ projectId: string; jobId: string }> }) {
@@ -37,39 +39,10 @@ export async function POST(req: NextRequest, context: { params: Promise<{ projec
     return new Response(JSON.stringify({ error: "job_not_failed" }), { status: 409 });
   }
 
-  // Check for existing transcription_segments for this job. If any exist, refuse retry to avoid conflicts.
-  const { data: segs, error: segErr } = await supabase
-    .from("transcription_segments")
-    .select("id", { count: "exact", head: true })
-    .eq("job_id", jobId);
-
-  if (segErr) {
-    return new Response(JSON.stringify({ error: segErr.message }), { status: 500 });
-  }
-  if (segs && (segs as any).count && (segs as any).count > 0) {
-    return new Response(JSON.stringify({ error: "segments_exist", message: "このジョブには既に部分的なセグメントがあります。再実行前に管理者に確認してください。" }), { status: 400 });
-  }
-
-  // Perform the update: set job back to queued and reset fields
-  const { error: updateErr } = await supabase
-    .from("transcription_jobs")
-    .update({
-      status: "queued",
-      progress: 0,
-      error_code: null,
-      error_message: null,
-      failed_at: null,
-      started_at: null,
-      completed_at: null,
-      locked_at: null,
-      worker_id: null,
-      attempt_count: 0,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", jobId)
-    .eq("project_id", projectId)
-    .eq("user_id", user.id)
-    .eq("status", "failed");
+  const { error: updateErr } = await resetFailedJob(createAdminSupabaseClient(), {
+    jobId,
+    userId: user.id,
+  });
 
   if (updateErr) {
     return new Response(JSON.stringify({ error: updateErr.message }), { status: 500 });
@@ -86,13 +59,14 @@ export async function POST(req: NextRequest, context: { params: Promise<{ projec
     return new Response(JSON.stringify({ error: countsErr.message }), { status: 500 });
   }
 
-  const completedParts = (counts || []).filter((j: any) => j.status === "completed").length;
-  const failedParts = (counts || []).filter((j: any) => j.status === "failed").length;
-  const totalParts = (counts || []).length;
+  const partStatuses = (counts || []) as Array<{ status: string }>;
+  const completedParts = partStatuses.filter((j) => j.status === "completed").length;
+  const failedParts = partStatuses.filter((j) => j.status === "failed").length;
+  const totalParts = partStatuses.length;
 
   const newStatus = failedParts === 0 && completedParts === totalParts && totalParts > 0
     ? "completed"
-    : (counts || []).some((j: any) => j.status === "processing" || j.status === "queued")
+    : partStatuses.some((j) => j.status === "processing" || j.status === "queued")
       ? "processing_parts"
       : failedParts > 0
         ? "failed"

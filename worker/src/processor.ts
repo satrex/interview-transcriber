@@ -11,7 +11,7 @@ import {
   touchJobLock,
   updateJobProgress,
 } from "./jobs.js";
-import { clearJobSegments, saveSegments } from "./segments.js";
+import { clearJobSegments, loadJobSegments, saveSegments } from "./segments.js";
 import { downloadJobAudio, uploadJobAudioChunks } from "./storage.js";
 import type { TranscriptionJob } from "./supabase.js";
 import { loadTermDictionaryPrompt } from "./term-dictionaries.js";
@@ -201,18 +201,73 @@ export async function processJob(
       );
     }
     await assertJobClaimActive(supabase, job);
-    await clearJobSegments(supabase, job.id);
-    await updateJobProgress(supabase, job, job.progress, 0);
+    const savedSegments = await loadJobSegments(supabase, job.id);
+    const chunkDurationMatches =
+      job.audio_chunk_duration_sec === config.audioChunkSeconds;
+    const shouldRestartFromBeginning =
+      savedSegments.length === 0 || !chunkDurationMatches;
+    let resumeFromChunkIndex = 0;
 
-    let totalSavedSegmentsCount = 0;
+    if (shouldRestartFromBeginning) {
+      await clearJobSegments(supabase, job.id);
+      await updateJobProgress(supabase, job, job.progress, 0);
+    } else {
+      resumeFromChunkIndex =
+        Math.max(...savedSegments.map((segment) => segment.chunkIndex)) + 1;
+      console.log(
+        `[worker] resuming job ${job.id} from chunk ${resumeFromChunkIndex} (${new Set(savedSegments.map((segment) => segment.chunkIndex)).size} chunk(s) already saved)`,
+      );
+      await updateJobProgress(
+        supabase,
+        job,
+        calculateProgress(resumeFromChunkIndex, chunks.length),
+        0,
+      );
+    }
+
+    const restoredSegments = shouldRestartFromBeginning ? [] : savedSegments;
+
+    let totalSavedSegmentsCount = restoredSegments.length;
     let totalSkippedSegmentsCount = 0;
-    const allSegments: NormalizedSegment[] = [];
+    const allSegments: NormalizedSegment[] = restoredSegments.map((segment) => ({
+      ...segment,
+    }));
+    const usedDisplayLabels = new Set(restoredSegments.map((segment) => segment.speakerLabel));
     const knownSpeakers: KnownSpeaker[] = [];
     const apiNewLabelToDisplayLabel = new Map<string, string>();
     let speakerReferencesEnabled = config.speakerReferencesEnabled;
 
+    if (!shouldRestartFromBeginning && speakerReferencesEnabled) {
+      const savedSegmentsByChunk = new Map<number, NormalizedSegment[]>();
+      for (const segment of allSegments) {
+        const chunkSegments = savedSegmentsByChunk.get(segment.chunkIndex) ?? [];
+        chunkSegments.push(segment);
+        savedSegmentsByChunk.set(segment.chunkIndex, chunkSegments);
+      }
+      for (const chunk of chunks) {
+        if (chunk.chunkIndex >= resumeFromChunkIndex) {
+          break;
+        }
+
+        await addSpeakerReferencesFromChunk({
+          config,
+          chunkPath: chunk.path,
+          chunkStartSec: chunk.chunkIndex * config.audioChunkSeconds,
+          outDir: `${downloaded.jobTmpDir}/speaker-references`,
+          knownSpeakers,
+          segments: savedSegmentsByChunk.get(chunk.chunkIndex) ?? [],
+          panEnvelope,
+          expectedSpeakerCount: job.expected_speaker_count,
+        });
+      }
+    }
+
     for (const chunk of chunks) {
       const chunkStartSec = chunk.chunkIndex * config.audioChunkSeconds;
+
+      if (chunk.chunkIndex < resumeFromChunkIndex) {
+        continue;
+      }
 
       if (chunk.bytes > 25 * 1024 * 1024) {
         throw new FinalJobFailure(
@@ -253,6 +308,7 @@ export async function processJob(
         knownSpeakers,
         apiNewLabelToDisplayLabel,
         expectedSpeakerCount: job.expected_speaker_count,
+        usedDisplayLabels,
       });
       totalSavedSegmentsCount += segments.length;
       totalSkippedSegmentsCount += transcribed.skippedSegmentsCount;
@@ -509,9 +565,13 @@ function assignDisplayLabels(
     knownSpeakers: KnownSpeaker[];
     apiNewLabelToDisplayLabel: Map<string, string>;
     expectedSpeakerCount: number | null;
+    usedDisplayLabels: Set<string>;
   },
 ) {
-  const usedLabels = new Set(options.knownSpeakers.map((speaker) => speaker.displayLabel));
+  const usedLabels = new Set(options.usedDisplayLabels);
+  for (const speaker of options.knownSpeakers) {
+    usedLabels.add(speaker.displayLabel);
+  }
   for (const label of options.apiNewLabelToDisplayLabel.values()) {
     usedLabels.add(label);
   }
@@ -519,6 +579,7 @@ function assignDisplayLabels(
   return segments.map((segment) => {
     if (!segment.speakerLabel.startsWith(NEW_SPEAKER_LABEL_PREFIX)) {
       usedLabels.add(segment.speakerLabel);
+      options.usedDisplayLabels.add(segment.speakerLabel);
       return segment;
     }
 
@@ -530,6 +591,7 @@ function assignDisplayLabels(
       displayLabel = nextDisplayLabel(usedLabels, options.expectedSpeakerCount);
       options.apiNewLabelToDisplayLabel.set(key, displayLabel);
       usedLabels.add(displayLabel);
+      options.usedDisplayLabels.add(displayLabel);
     }
 
     return { ...segment, speakerLabel: displayLabel };

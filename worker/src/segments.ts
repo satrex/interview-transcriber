@@ -2,6 +2,44 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { retryTransientOperation } from "./retry.js";
 import type { NormalizedSegment } from "./transcribe.js";
 
+export type SavedJobSegment = {
+  speakerLabel: string;
+  startSec: number;
+  endSec: number;
+  text: string;
+  chunkIndex: number;
+  segmentIndex: number;
+};
+
+export async function loadJobSegments(
+  supabase: SupabaseClient,
+  jobId: string,
+): Promise<SavedJobSegment[]> {
+  const { data, error } = await retryTransientOperation(
+    { operation: `load segments for job ${jobId}` },
+    () =>
+      supabase
+        .from("transcription_segments")
+        .select("speaker_label, start_sec, end_sec, text, chunk_index, segment_index")
+        .eq("job_id", jobId)
+        .order("chunk_index", { ascending: true })
+        .order("segment_index", { ascending: true }),
+  );
+
+  if (error) {
+    throw new Error(`Failed to load existing segments: ${error.message}`);
+  }
+
+  return (data ?? []).map((segment) => ({
+    speakerLabel: String(segment.speaker_label),
+    startSec: Number(segment.start_sec),
+    endSec: Number(segment.end_sec),
+    text: String(segment.text),
+    chunkIndex: Number(segment.chunk_index),
+    segmentIndex: Number(segment.segment_index),
+  }));
+}
+
 export async function clearJobSegments(
   supabase: SupabaseClient,
   jobId: string,

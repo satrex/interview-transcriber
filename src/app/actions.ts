@@ -19,6 +19,7 @@ import {
   fetchAllSegmentEdits,
   fetchAllSegments,
 } from "@/lib/transcript-segments";
+import { resetFailedJob } from "@/lib/jobs/reset";
 
 export type CreateProjectActionInput = {
   projectId: string;
@@ -650,7 +651,7 @@ export async function retryTranscriptionJob(
 
     const { data: job, error: jobError } = await supabase
       .from("transcription_jobs")
-      .select("id, status")
+      .select("id, user_id, status")
       .eq("id", jobId)
       .single();
 
@@ -662,24 +663,15 @@ export async function retryTranscriptionJob(
       return { error: "failed 状態のジョブのみ再実行できます。", success: false };
     }
 
+    if (job.user_id !== user.id) {
+      return { error: "ジョブが見つからないか、再実行権限がありません。", success: false };
+    }
+
     const adminSupabase = createAdminSupabaseClient();
-    const { error: updateError } = await adminSupabase
-      .from("transcription_jobs")
-      .update({
-        attempt_count: 0,
-        completed_at: null,
-        error_code: null,
-        error_message: null,
-        failed_at: null,
-        locked_at: null,
-        processed_audio_seconds: null,
-        progress: 0,
-        started_at: null,
-        status: "queued",
-        worker_id: null,
-      })
-      .eq("id", job.id)
-      .eq("user_id", user.id);
+    const { error: updateError } = await resetFailedJob(adminSupabase, {
+      jobId: job.id,
+      userId: user.id,
+    });
 
     if (updateError) {
       return {

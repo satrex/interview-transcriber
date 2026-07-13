@@ -188,7 +188,7 @@ function buildTranscriptionPrompt(promptSuffix?: string | null) {
   return [TRANSCRIPTION_PROMPT, promptSuffix?.trim()].filter(Boolean).join("\n\n");
 }
 
-function classifyOpenAITranscriptionError(error: unknown): {
+export function classifyOpenAITranscriptionError(error: unknown): {
   delayMs: (attempt: number) => number;
   errorCode: OpenAITranscriptionErrorCode;
   maxAttempts: number;
@@ -259,6 +259,18 @@ function classifyOpenAITranscriptionError(error: unknown): {
       delayMs: (attempt) => attempt * 30_000,
       errorCode: "rate_limited",
       maxAttempts: 3,
+      retryable: true,
+    };
+  }
+
+  if (
+    (status !== null && status >= 500) ||
+    message.includes("the server had an error")
+  ) {
+    return {
+      delayMs: (attempt) => attempt * 30_000,
+      errorCode: "openai_error",
+      maxAttempts: 5,
       retryable: true,
     };
   }
