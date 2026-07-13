@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { WorkerConfig } from "./config.js";
 import { probeAudio } from "./ffprobe.js";
 import { downloadJobAudio } from "./storage.js";
+import { startLockHeartbeat } from "./heartbeat.js";
 import type { TranscriptionProject } from "./supabase.js";
 
 export class ProjectFailure extends Error {
@@ -17,18 +18,27 @@ export class ProjectFailure extends Error {
   }
 }
 
+export class ProjectOwnershipLostError extends Error {
+  constructor(project: TranscriptionProject, action: string) {
+    super(
+      `Lost ownership of project ${project.id} attempt ${project.attempt_count} while ${action}.`,
+    );
+    this.name = "ProjectOwnershipLostError";
+  }
+}
+
 export async function claimQueuedProject(
   supabase: SupabaseClient,
   workerId: string,
   options: {
     lockTimeoutMinutes: number;
+    maxAttempts: number;
   },
 ): Promise<TranscriptionProject | null> {
-  const lockTimeoutAt = new Date(Date.now() + options.lockTimeoutMinutes * 60 * 1000);
-
   const { data, error } = await supabase.rpc("claim_queued_project", {
     p_worker_id: workerId,
-    p_lock_timeout_at: lockTimeoutAt.toISOString(),
+    p_lock_timeout_minutes: options.lockTimeoutMinutes,
+    p_max_attempts: options.maxAttempts,
   });
 
   if (error) {
@@ -38,20 +48,28 @@ export async function claimQueuedProject(
   return data?.[0] || null;
 }
 
-export async function markProjectSplitting(
+export async function touchProjectLock(
   supabase: SupabaseClient,
   project: TranscriptionProject,
 ): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("transcription_projects")
     .update({
-      status: "splitting",
-      updated_at: new Date().toISOString(),
+      locked_at: new Date().toISOString(),
     })
-    .eq("id", project.id);
+    .eq("id", project.id)
+    .eq("status", "splitting")
+    .eq("worker_id", project.worker_id)
+    .eq("attempt_count", project.attempt_count)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
-    throw new Error(`Failed to mark project splitting: ${error.message}`);
+    throw new Error(`Failed to refresh project lock: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new ProjectOwnershipLostError(project, "refreshing lock");
   }
 }
 
@@ -61,7 +79,7 @@ export async function updateProjectWithParts(
   totalDurationSec: number,
   totalParts: number,
 ): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("transcription_projects")
     .update({
       status: "processing_parts",
@@ -69,10 +87,19 @@ export async function updateProjectWithParts(
       total_parts: totalParts,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", project.id);
+    .eq("id", project.id)
+    .eq("status", "splitting")
+    .eq("worker_id", project.worker_id)
+    .eq("attempt_count", project.attempt_count)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     throw new Error(`Failed to update project with parts: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new ProjectOwnershipLostError(project, "updating parts");
   }
 }
 
@@ -99,7 +126,7 @@ export async function markProjectFailed(
   errorMessage: string,
   errorCode?: string,
 ): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("transcription_projects")
     .update({
       status: "failed",
@@ -107,10 +134,21 @@ export async function markProjectFailed(
       error_code: errorCode,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", project.id);
+    .eq("id", project.id)
+    .eq("status", "splitting")
+    .eq("worker_id", project.worker_id)
+    .eq("attempt_count", project.attempt_count)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     throw new Error(`Failed to mark project failed: ${error.message}`);
+  }
+
+  if (!data) {
+    console.error(
+      `Project ${project.id} failure update skipped because this worker no longer owns attempt ${project.attempt_count}.`,
+    );
   }
 }
 
@@ -195,7 +233,14 @@ export async function createPartJobs(
     is_project_part: true,
   }));
 
-  const { error } = await supabase.from("transcription_jobs").insert(partJobs);
+  // A reclaimed attempt may re-run after part jobs were already inserted;
+  // ignoreDuplicates keeps the existing rows (and their progress) untouched.
+  const { error } = await supabase
+    .from("transcription_jobs")
+    .upsert(partJobs, {
+      onConflict: "project_id,part_index",
+      ignoreDuplicates: true,
+    });
 
   if (error) {
     throw new Error(`Failed to create project part jobs: ${error.message}`);
@@ -209,11 +254,17 @@ export async function processProject(
 ) {
   let projectTmpDir: string | null = null;
   const MIN_VALID_AUDIO_BYTES = 100 * 1024; // 100KB
+  const heartbeat = startLockHeartbeat({
+    label: `project ${project.id}`,
+    lockTimeoutMinutes: config.lockTimeoutMinutes,
+    maxFailures: config.maxLockRefreshFailures,
+    touch: () => touchProjectLock(supabase, project),
+  });
 
   try {
-    console.log(`[worker] processing project ${project.id}: ${project.title}`);
-
-    await markProjectSplitting(supabase, project);
+    console.log(
+      `[worker] processing project ${project.id} attempt ${project.attempt_count}: ${project.title}`,
+    );
 
     console.log(`[worker] downloading project source ${project.id}: ${project.storage_path}`);
     const downloaded = await downloadJobAudio(
@@ -262,6 +313,8 @@ export async function processProject(
     }> = [];
 
     for (let i = 0; i < totalParts; i++) {
+      heartbeat.assertHealthy();
+
       const startSec = i * partDurationSec;
       const endSec = Math.min((i + 1) * partDurationSec, totalDurationSec);
       const duration = endSec - startSec;
@@ -383,6 +436,8 @@ export async function processProject(
       audioContentType: string;
     }> = [];
     for (const part of parts) {
+      heartbeat.assertHealthy();
+
       const partInfo = await probeAudio(
         config.ffprobePath,
         part.localPath,
@@ -421,17 +476,29 @@ export async function processProject(
       });
     }
 
-    await updateProjectWithParts(supabase, project, totalDurationSec, totalParts);
+    heartbeat.assertHealthy();
+
+    // Insert part jobs before flipping the status so a crash in between leaves
+    // the project in 'splitting', where stale reclaim can pick it up again.
     await createPartJobs(supabase, project, uploadedParts);
+    await updateProjectWithParts(supabase, project, totalDurationSec, totalParts);
 
     console.log(`[worker] project ${project.id} split into ${totalParts} parts`);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    const errorCode = error instanceof ProjectFailure ? error.errorCode : "project_split_failed";
     console.error(`[worker] project ${project.id} failed:`, message);
+
+    if (error instanceof ProjectOwnershipLostError) {
+      // Another attempt owns the project now; don't clobber its state.
+      throw error;
+    }
+
+    const errorCode = error instanceof ProjectFailure ? error.errorCode : "project_split_failed";
     await markProjectFailed(supabase, project, message, errorCode);
     throw error;
   } finally {
+    heartbeat.stop();
+
     if (projectTmpDir) {
       try {
         await rm(projectTmpDir, { recursive: true, force: true });

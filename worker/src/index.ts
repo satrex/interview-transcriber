@@ -42,6 +42,7 @@ async function main() {
       // First, try to claim a queued project
       const project = await claimQueuedProject(supabase, config.workerId, {
         lockTimeoutMinutes: config.lockTimeoutMinutes,
+        maxAttempts: config.maxAttempts,
       });
 
       if (project) {

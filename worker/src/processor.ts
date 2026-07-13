@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { WorkerConfig } from "./config.js";
 import { splitAudioIntoChunks } from "./ffmpeg.js";
+import { startLockHeartbeat } from "./heartbeat.js";
 import { probeAudio } from "./ffprobe.js";
 import {
   assertJobClaimActive,
@@ -728,51 +729,12 @@ function startHeartbeat(
     maxFailures: number;
   },
 ) {
-  const intervalMs = Math.max(
-    30_000,
-    Math.min(60_000, (options.lockTimeoutMinutes * 60_000) / 2),
-  );
-  let consecutiveFailures = 0;
-  let fatalError: Error | null = null;
-  let isRefreshing = false;
-
-  const interval = setInterval(() => {
-    if (isRefreshing || fatalError) {
-      return;
-    }
-
-    isRefreshing = true;
-    touchJobLock(supabase, job)
-      .then(() => {
-        consecutiveFailures = 0;
-      })
-      .catch((error) => {
-        consecutiveFailures += 1;
-        console.error(
-          `[worker] Supabase lock refresh failed for job ${job.id} (${consecutiveFailures}/${options.maxFailures} consecutive refresh operation failures): ${formatErrorMessage(error)}`,
-        );
-
-        if (consecutiveFailures >= options.maxFailures) {
-          fatalError = new Error(
-            `Supabase lock refresh failed ${consecutiveFailures} consecutive time(s): ${formatErrorMessage(error)}`,
-          );
-        }
-      })
-      .finally(() => {
-        isRefreshing = false;
-      });
-  }, intervalMs);
-
-  return {
-    assertHealthy() {
-      if (fatalError) {
-        throw fatalError;
-      }
-    },
-    stop() {
-      clearInterval(interval);
-    },
-  };
+  return startLockHeartbeat({
+    label: `job ${job.id}`,
+    lockTimeoutMinutes: options.lockTimeoutMinutes,
+    maxFailures: options.maxFailures,
+    touch: () => touchJobLock(supabase, job),
+  });
 }
 
 function calculateProgress(completedChunks: number, totalChunks: number) {

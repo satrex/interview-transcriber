@@ -40,6 +40,10 @@ export type TranscriptionProject = {
   failed_parts: number;
   error_message: string | null;
   error_code: string | null;
+  attempt_count: number;
+  worker_id: string | null;
+  locked_at: string | null;
+  started_at: string | null;
   created_at: string;
   updated_at: string;
 };
